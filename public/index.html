@@ -523,7 +523,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 </div>
 
 <!-- RECONNECTING (shown to the player who dropped and came back) -->
-<div id="reconnect-overlay" class="hidden" style="position:absolute;inset:0;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;z-index:30;">
+<div id="reconnect-overlay" class="overlay hidden" style="background:rgba(0,0,0,.88);z-index:30;">
   <div class="panel" style="text-align:center;padding:36px 40px;">
     <div style="font-size:2.5rem;margin-bottom:12px;">🔄</div>
     <h2 style="margin-bottom:8px;">Reconnecting…</h2>
@@ -536,7 +536,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 </div>
 
 <!-- OPPONENT RECONNECTING (shown to the player still in the game) -->
-<div id="opp-reconnect-overlay" class="hidden" style="position:absolute;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:28;">
+<div id="opp-reconnect-overlay" class="overlay hidden" style="background:rgba(0,0,0,.72);z-index:28;">
   <div class="panel" style="text-align:center;padding:32px 40px;">
     <div style="font-size:2.5rem;margin-bottom:12px;">⏳</div>
     <h2 style="margin-bottom:6px;">Opponent Disconnected</h2>
