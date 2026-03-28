@@ -502,6 +502,30 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
   </div>
 </div>
 
+<!-- RECONNECTING (shown to the player who dropped and came back) -->
+<div id="reconnect-overlay" class="hidden" style="position:absolute;inset:0;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;z-index:30;">
+  <div class="panel" style="text-align:center;padding:36px 40px;">
+    <div style="font-size:2.5rem;margin-bottom:12px;">🔄</div>
+    <h2 style="margin-bottom:8px;">Reconnecting…</h2>
+    <p style="color:#9977cc;">Restoring your game</p>
+    <div style="margin-top:16px;width:100%;height:4px;background:#1a1040;border-radius:2px;overflow:hidden;">
+      <div id="reconnect-bar" style="height:100%;background:linear-gradient(90deg,#7744cc,#aa55ff);width:0%;transition:width 1s linear;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- OPPONENT RECONNECTING (shown to the player still in the game) -->
+<div id="opp-reconnect-overlay" class="hidden" style="position:absolute;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:28;">
+  <div class="panel" style="text-align:center;padding:32px 40px;">
+    <div style="font-size:2.5rem;margin-bottom:12px;">⏳</div>
+    <h2 style="margin-bottom:6px;">Opponent Disconnected</h2>
+    <p style="color:#9977cc;">Waiting for them to reconnect…</p>
+    <div style="font-size:3rem;font-family:'Courier New',monospace;font-weight:700;color:#cc99ff;margin:14px 0;" id="opp-reconnect-countdown">90</div>
+    <p style="color:#554466;font-size:.82rem;">Game will end if they don't return in time</p>
+    <button class="btn btn-secondary" style="margin-top:14px;" onclick="backToMenu()">Forfeit &amp; Leave</button>
+  </div>
+</div>
+
 <!-- GAME OVER -->
 <div id="gameover-overlay" class="hidden">
   <div class="panel">
@@ -545,6 +569,11 @@ function saveSession(email,pin){localStorage.setItem('chess3d_session',JSON.stri
 function clearSession(){localStorage.removeItem('chess3d_session');}
 function getSession(){try{return JSON.parse(localStorage.getItem('chess3d_session'));}catch{return null;}}
 
+// Reconnect token — saved when game starts, cleared on clean exit
+function saveReconnectToken(code,color,token){localStorage.setItem('chess3d_reconnect',JSON.stringify({code,color,token,expiry:Date.now()+90000}));}
+function clearReconnectToken(){localStorage.removeItem('chess3d_reconnect');}
+function getReconnectToken(){try{const d=JSON.parse(localStorage.getItem('chess3d_reconnect')||'null');return(d&&d.expiry>Date.now())?d:null;}catch{return null;}}
+
 // ── Game State ────────────────────────────────────────────────────────────────
 let socket,playerColor,roomCode;
 let selectedFrom=null,validMoveList=[];
@@ -552,6 +581,7 @@ let gameState=null;
 let myNameVal='You',oppNameVal='Opponent';
 let pendingTC=null,pendingLevel=5;
 let displayClocks={white:null,black:null};
+let oppReconnectInterval=null; // countdown interval when opponent disconnects
 
 // ── Three.js ──────────────────────────────────────────────────────────────────
 let scene,camera,renderer,raycaster;
@@ -1115,10 +1145,14 @@ function copyRoomCode(){
 }
 function sendRematch(){socket.emit('rematch');document.getElementById('rematch-status').textContent='Rematch requested…';}
 function backToMenu(){
+  clearReconnectToken();
+  if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
   show('menu');gameState=null;playerColor=null;roomCode=null;displayClocks={white:null,black:null};
   deselect();if(socket){socket.disconnect();socket=null;}
   document.getElementById('gameover-overlay').classList.add('hidden');
   document.getElementById('promo-overlay').classList.add('hidden');
+  document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+  document.getElementById('reconnect-overlay').classList.add('hidden');
   document.getElementById('rematch-status').textContent='';
   while(piecesGroup.children.length)piecesGroup.remove(piecesGroup.children[0]);
   clearHighlights();
@@ -1223,8 +1257,20 @@ function initSocket(){
 
   // Game
   socket.on('connect',()=>{
-    // If we were waiting in a room and socket reconnected, try to rejoin
-    if(roomCode&&document.getElementById('waiting-overlay')&&!document.getElementById('waiting-overlay').classList.contains('hidden')){
+    // Priority 1: try to rejoin an active game (mid-game disconnect)
+    const rc=getReconnectToken();
+    if(rc){
+      // Show reconnecting overlay with animated bar
+      document.getElementById('reconnect-overlay').classList.remove('hidden');
+      let pct=0;
+      const barAnim=setInterval(()=>{pct=Math.min(pct+2,90);document.getElementById('reconnect-bar').style.width=pct+'%';},100);
+      socket.emit('rejoin_game',{code:rc.code,color:rc.color,token:rc.token});
+      // If rejoin_failed fires, barAnim will stop via that handler; also stop after 5s safety
+      setTimeout(()=>clearInterval(barAnim),5000);
+      return;
+    }
+    // Priority 2: rejoin pre-game waiting room
+    if(roomCode&&!document.getElementById('waiting-overlay').classList.contains('hidden')){
       socket.emit('rejoin_room',{code:roomCode});
     }
   });
@@ -1237,22 +1283,70 @@ function initSocket(){
     oppNameVal=yourColor==='white'?blackName:whiteName;
     playToss(yourColor,whiteName,blackName);
   });
-  socket.on('game_start',({whiteSocketId,blackSocketId,code,whiteName,blackName,timeControl})=>{
+  socket.on('game_start',({whiteSocketId,blackSocketId,code,whiteName,blackName,timeControl,reconnectTokens})=>{
     const color=socket.id===whiteSocketId?'white':'black';
     playerColor=color;roomCode=code;
     myNameVal=color==='white'?whiteName:blackName;
     oppNameVal=color==='white'?blackName:whiteName;
+    // Save reconnect token so we can rejoin if we accidentally leave
+    if(reconnectTokens&&reconnectTokens[color])saveReconnectToken(code,color,reconnectTokens[color]);
     document.getElementById('gameover-overlay').classList.add('hidden');
+    document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+    document.getElementById('reconnect-overlay').classList.add('hidden');
     document.getElementById('rematch-status').textContent='';
     setTimeout(()=>{show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,true);},900);
+  });
+
+  // Opponent dropped mid-game — show countdown
+  socket.on('opponent_disconnected_temp',({color,seconds})=>{
+    let remaining=seconds;
+    document.getElementById('opp-reconnect-countdown').textContent=remaining;
+    document.getElementById('opp-reconnect-overlay').classList.remove('hidden');
+    if(oppReconnectInterval)clearInterval(oppReconnectInterval);
+    oppReconnectInterval=setInterval(()=>{
+      remaining--;
+      document.getElementById('opp-reconnect-countdown').textContent=Math.max(0,remaining);
+      if(remaining<=0){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
+    },1000);
+  });
+
+  // Opponent came back — hide countdown, resume
+  socket.on('opponent_reconnected',()=>{
+    if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
+    document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+  });
+
+  // Opponent never came back — they forfeited
+  socket.on('opponent_abandoned',({loser,winner})=>{
+    if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
+    document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+    clearReconnectToken();
+    const won=winner===playerColor;
+    showGameOver(won?'🏆 Victory!':'🏳 Game Abandoned',`Opponent didn't reconnect in time.`,won?'#88ff99':'#ccaa55');
+  });
+
+  // We successfully rejoined an active game
+  socket.on('game_rejoined',({color,code,whiteName,blackName})=>{
+    playerColor=color;roomCode=code;
+    myNameVal=color==='white'?whiteName:blackName;
+    oppNameVal=color==='white'?blackName:whiteName;
+    document.getElementById('reconnect-overlay').classList.add('hidden');
+    show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,false);
+  });
+
+  // Rejoin attempt failed (game gone, token invalid, etc.)
+  socket.on('rejoin_failed',(msg)=>{
+    clearReconnectToken();
+    document.getElementById('reconnect-overlay').classList.add('hidden');
+    show('menu');
   });
   socket.on('game_state',(state)=>{
     gameState=state;renderPieces(state.board);applyHighlights(state.board);updateHUD();
     if(state.status==='checkmate'||state.status==='stalemate'){
+      clearReconnectToken(); // game is over, no need to rejoin
       setTimeout(()=>{
         if(state.status==='checkmate'){const won=state.winner===playerColor;showGameOver(won?'🏆 Victory!':'💀 Defeat',`Checkmate — ${state.winner} wins!`,won?'#88ff99':'#ff8866');}
         else showGameOver('⚖ Draw','Stalemate — no legal moves.','#cccc88');
-        // Update local stats
         if(currentUser){
           if(state.status==='checkmate'){if(state.winner===playerColor)currentUser.stats.wins++;else currentUser.stats.losses++;}
           else currentUser.stats.draws++;
@@ -1265,6 +1359,7 @@ function initSocket(){
     updateClocks(white,black);
   });
   socket.on('timeout',({loser,winner})=>{
+    clearReconnectToken();
     const won=winner===playerColor;
     showGameOver(won?'🏆 Victory!':'⏰ Time Out',`${loser===playerColor?'Your':'Opponent\'s'} time ran out!`,won?'#88ff99':'#ff8866');
     if(currentUser){if(won)currentUser.stats.wins++;else currentUser.stats.losses++;}

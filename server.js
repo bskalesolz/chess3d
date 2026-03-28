@@ -316,13 +316,17 @@ const waitingQueues = new Map();
 
 function genCode(){let c;do{c=Math.random().toString(36).substr(2,6).toUpperCase();}while(rooms.has(c));return c;}
 function genId(){return Math.random().toString(36).substr(2,12);}
+function genToken(){return Math.random().toString(36).substr(2,18)+Math.random().toString(36).substr(2,18);}
 
 function makeRoom(opts){
   const code=genCode();
   const room={code,mode:opts.mode||'multiplayer',white:null,black:null,names:{white:'',black:''},
     whiteEmail:null,blackEmail:null,
     timeControl:opts.timeControl||null,clocks:null,ai:opts.ai||null,game:null,rematchVotes:null,
-    tournamentId:opts.tournamentId||null,matchId:opts.matchId||null};
+    tournamentId:opts.tournamentId||null,matchId:opts.matchId||null,
+    reconnectTokens:{white:null,black:null},   // secure per-player tokens for mid-game rejoin
+    disconnected:null,                          // {color,timer} when a player drops mid-game
+  };
   rooms.set(code,room); return room;
 }
 
@@ -341,11 +345,15 @@ function newGame(){
 function startGame(room){
   if (!rooms.has(room.code)) return;
   room.game=newGame();
+  room.disconnected=null;
+  // Fresh reconnect tokens each game
+  room.reconnectTokens={white:genToken(),black:genToken()};
   startClocks(room);
-  // Broadcast to room channel with both socket IDs so each client picks its own color
+  // Broadcast to room channel; each client identifies its color by socket.id
   io.to(room.code).emit('game_start',{
     whiteSocketId:room.white, blackSocketId:room.black,
-    code:room.code, whiteName:room.names.white, blackName:room.names.black, timeControl:room.timeControl
+    code:room.code, whiteName:room.names.white, blackName:room.names.black, timeControl:room.timeControl,
+    reconnectTokens:room.reconnectTokens
   });
   emitState(room);
   if (room.mode==='pvc'&&room.ai.color==='white') setTimeout(()=>doAiMove(room),700);
@@ -827,6 +835,28 @@ io.on('connection', (socket) => {
     } else { socket.to(room.code).emit('rematch_requested'); }
   });
 
+  socket.on('rejoin_game',({code,color,token})=>{
+    const room=rooms.get((code||'').toUpperCase().trim());
+    if(!room||!room.game){socket.emit('rejoin_failed','Game no longer available.');return;}
+    if(!room.disconnected||room.disconnected.color!==color){socket.emit('rejoin_failed','No reconnection pending.');return;}
+    if(!room.reconnectTokens||room.reconnectTokens[color]!==token){socket.emit('rejoin_failed','Invalid token.');return;}
+    // Cancel the 90-second abandon timer
+    if(room.disconnected.timer){clearTimeout(room.disconnected.timer);room.disconnected.timer=null;}
+    room.disconnected=null;
+    // Restore socket in room
+    if(color==='white'){room.white=socket.id;if(sessionEmail)room.whiteEmail=sessionEmail;}
+    else{room.black=socket.id;if(sessionEmail)room.blackEmail=sessionEmail;}
+    socket.join(room.code);
+    // Resume clocks from where they paused
+    if(room.clocks){room.clocks.lastTick=Date.now();startClocks(room);}
+    // Send current game state to the rejoining player
+    socket.emit('game_rejoined',{color,code:room.code,whiteName:room.names.white,blackName:room.names.black,timeControl:room.timeControl,reconnectToken:token});
+    emitState(room);
+    // Tell the waiting opponent their partner is back
+    socket.to(room.code).emit('opponent_reconnected');
+    console.log(`[rejoin] ${color} rejoined room ${room.code}`);
+  });
+
   socket.on('rejoin_room',({code})=>{
     // Creator reconnects to their waiting room after a socket drop
     const room=rooms.get((code||'').toUpperCase().trim());
@@ -846,19 +876,37 @@ io.on('connection', (socket) => {
     }
     for(const[key,e]of waitingQueues){if(e.socket.id===socket.id){waitingQueues.delete(key);break;}}
     const room=getRoomBySocket(socket.id);
-    if(room){
-      stopClocks(room);
-      if(room.game){
-        // Game was in progress — notify opponent, delete room
-        socket.to(room.code).emit('opponent_disconnected');
-        rooms.delete(room.code);
-      } else {
-        // Game not yet started — keep room alive for 90s so joiner can still connect
-        // Null out the disconnected socket slot so getRoomBySocket won't find stale id
-        if(room.white===socket.id){ room._creatorReconnectEmail=room.whiteEmail; room.white=null; }
-        if(room.black===socket.id){ room.black=null; }
-        room._cleanupTimer=setTimeout(()=>{ if(rooms.has(room.code)&&!room.game) rooms.delete(room.code); },90000);
-      }
+    if(!room) return;
+    const color=getColor(room,socket.id);
+    stopClocks(room);
+    const gameActive=room.game&&(room.game.status==='playing'||room.game.status==='check');
+    if(gameActive&&room.mode==='multiplayer'){
+      // ── Mid-game disconnect: give 90 seconds to rejoin ──
+      // Null out the slot so getRoomBySocket won't match stale id
+      if(color==='white') room.white=null; else room.black=null;
+      // Notify the opponent — they see a countdown
+      socket.to(room.code).emit('opponent_disconnected_temp',{color,seconds:90});
+      // 90-second abandon timer
+      const timer=setTimeout(()=>{
+        if(!rooms.has(room.code)) return;
+        if(room.disconnected&&room.disconnected.color===color){
+          // They never came back — opponent wins
+          if(room.game){room.game.status='abandoned';room.game.winner=opp(color);}
+          saveGameLog(room,'abandoned');
+          io.to(room.code).emit('opponent_abandoned',{loser:color,winner:opp(color)});
+          rooms.delete(room.code);
+        }
+      },90000);
+      room.disconnected={color,timer};
+    } else if(room.game){
+      // Game finished or PvC — just clean up
+      socket.to(room.code).emit('opponent_disconnected');
+      rooms.delete(room.code);
+    } else {
+      // Pre-game lobby: keep room alive 90s for creator reconnect
+      if(color==='white'){ room._creatorReconnectEmail=room.whiteEmail; room.white=null; }
+      else room.black=null;
+      room._cleanupTimer=setTimeout(()=>{ if(rooms.has(room.code)&&!room.game) rooms.delete(room.code); },90000);
     }
   });
 });
