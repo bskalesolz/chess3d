@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>3D Chess</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:#09090f;overflow:hidden;font-family:'Segoe UI',sans-serif;color:#eee;height:100vh;}
-canvas{display:block;position:absolute;inset:0;}
+canvas{display:block;position:absolute;inset:0;touch-action:none;}
 
 /* ── Overlays ── */
 .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.78);z-index:10;}
 .overlay.hidden{display:none;}
-.panel{background:linear-gradient(160deg,#11102e,#1c1042);border:1px solid #6644cc44;border-radius:18px;padding:36px 44px;min-width:340px;text-align:center;box-shadow:0 0 80px #2200aa33;max-height:92vh;overflow-y:auto;}
+.panel{background:linear-gradient(160deg,#11102e,#1c1042);border:1px solid #6644cc44;border-radius:18px;padding:36px 44px;min-width:min(340px,92vw);width:min(520px,94vw);text-align:center;box-shadow:0 0 80px #2200aa33;max-height:92vh;overflow-y:auto;}
 .panel h1{font-size:2.4rem;letter-spacing:6px;color:#c8a8ff;margin-bottom:4px;}
 .panel h2{font-size:1.25rem;color:#9977dd;margin-bottom:20px;letter-spacing:3px;}
 .panel p{color:#887799;margin-bottom:14px;font-size:.9rem;}
@@ -156,6 +156,53 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 .game-log-row .result-win{color:#88ff99;}
 .game-log-row .result-loss{color:#ff8866;}
 .game-log-row .result-draw{color:#cccc88;}
+
+/* ── Mobile responsive ── */
+@media(max-width:600px){
+  .panel{padding:22px 18px;border-radius:14px;}
+  .panel h1{font-size:1.8rem;letter-spacing:3px;}
+  .panel h2{font-size:1rem;letter-spacing:2px;margin-bottom:14px;}
+  .mode-btn{padding:12px 14px;gap:10px;}
+  .mode-btn .icon{font-size:1.5rem;width:28px;}
+  .mode-btn .label{font-size:.9rem;}
+  .mode-btn .sub{font-size:.72rem;}
+  .tc-grid{grid-template-columns:repeat(2,1fr);}
+  .level-grid{grid-template-columns:repeat(5,1fr);}
+  .btn{padding:11px;font-size:.88rem;}
+  .code-box{font-size:1.1rem;letter-spacing:4px;}
+  /* HUD compact */
+  #hud{padding:6px 8px;}
+  .hud-panel{padding:6px 8px;min-width:0;border-radius:8px;}
+  .hud-panel h3{font-size:.58rem;letter-spacing:1px;}
+  .hud-name{font-size:.75rem;}
+  .hud-cap{font-size:10px;min-height:14px;}
+  .hud-clock{font-size:1rem;min-height:20px;}
+  #turn-indicator{font-size:.72rem;padding:5px 10px;letter-spacing:0;white-space:normal;text-align:center;}
+  .hud-center{padding:0 4px;}
+  /* Auth bar compact */
+  #auth-bar{top:6px;right:6px;gap:4px;}
+  .auth-bar-btn{padding:4px 8px;font-size:.7rem;}
+  #auth-bar-name{display:none;}
+  /* Challenge popup */
+  #challenge-popup{width:88vw;padding:16px 18px;}
+  /* Promo buttons bigger tap area */
+  .promo-btn{width:64px;height:64px;font-size:36px;}
+  /* Stats */
+  .stat-box{padding:8px 12px;}
+  .stat-val{font-size:1.3rem;}
+  /* Friends list */
+  .friend-challenge-btn{padding:4px 8px;}
+  /* Toss */
+  .toss-coin-wrap{font-size:3.8rem;margin:12px 0;}
+  .toss-reveal{font-size:.95rem;}
+}
+@media(max-width:380px){
+  .panel{padding:16px 12px;}
+  .tc-grid{grid-template-columns:repeat(2,1fr);}
+  .level-grid{grid-template-columns:repeat(5,1fr);}
+  .hud-clock{font-size:.85rem;}
+  .hud-name{font-size:.68rem;}
+}
 </style>
 </head>
 <body>
@@ -180,7 +227,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- MAIN MENU -->
 <div class="overlay" id="menu-overlay">
-  <div class="panel" style="min-width:380px">
+  <div class="panel">
     <h1>♟ CHESS</h1>
     <h2>3 D</h2>
 
@@ -228,7 +275,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- AUTH: REGISTER -->
 <div class="overlay hidden" id="auth-register-overlay">
-  <div class="panel" style="min-width:360px">
+  <div class="panel" style="">
     <h2>✨ Create Account</h2>
     <input type="text" id="reg-name" placeholder="Your name" maxlength="30">
     <select id="reg-gender">
@@ -247,7 +294,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- AUTH: LOGIN -->
 <div class="overlay hidden" id="auth-login-overlay">
-  <div class="panel" style="min-width:340px">
+  <div class="panel" style="">
     <h2>🔑 Login</h2>
     <input type="email" id="login-email" placeholder="Email address">
     <input type="password" id="login-pin" placeholder="4-digit PIN" maxlength="4" inputmode="numeric">
@@ -259,7 +306,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- PROFILE -->
 <div class="overlay hidden" id="profile-overlay">
-  <div class="panel" style="min-width:380px">
+  <div class="panel" style="">
     <h2>👤 Profile</h2>
     <div id="profile-name" style="font-size:1.3rem;font-weight:700;color:#c8a8ff;margin-bottom:4px;"></div>
     <div id="profile-email" style="font-size:.8rem;color:#7755aa;margin-bottom:16px;"></div>
@@ -277,7 +324,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- FRIENDS OVERLAY -->
 <div class="overlay hidden" id="friends-overlay">
-  <div class="panel" style="min-width:380px">
+  <div class="panel" style="">
     <h2>👥 Friends</h2>
     <div class="row">
       <input type="email" id="add-friend-email" placeholder="Friend's email">
@@ -299,7 +346,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- MULTIPLAYER SETUP -->
 <div class="overlay hidden" id="mp-setup-overlay">
-  <div class="panel" style="min-width:420px">
+  <div class="panel" style="">
     <h2>👥 Multiplayer</h2>
     <input type="text" id="mp-name" placeholder="Your name" maxlength="20">
     <div class="section-label">Time Control</div>
@@ -320,7 +367,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- PvC SETUP -->
 <div class="overlay hidden" id="pvc-setup-overlay">
-  <div class="panel" style="min-width:400px">
+  <div class="panel" style="">
     <h2>🤖 vs Computer</h2>
     <input type="text" id="pvc-name" placeholder="Your name" maxlength="20">
     <div class="section-label">Difficulty</div>
@@ -333,7 +380,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- SETTINGS -->
 <div class="overlay hidden" id="settings-overlay">
-  <div class="panel" style="min-width:340px">
+  <div class="panel" style="">
     <h2>⚙️ Settings</h2>
     <div class="toggle-row">
       <span class="toggle-label">Show move predictions</span>
@@ -359,7 +406,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- TOSS -->
 <div class="overlay hidden" id="toss-overlay">
-  <div class="panel" style="min-width:320px;padding:40px 50px">
+  <div class="panel" style="padding:32px 28px">
     <h2 id="toss-heading">Coin Toss</h2>
     <div class="toss-coin-wrap"><span id="toss-coin" class="spinning">🪙</span></div>
     <div id="toss-reveal" style="display:none" class="toss-reveal"></div>
@@ -369,7 +416,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- TOURNAMENT LOBBY -->
 <div class="overlay hidden" id="tournament-lobby-overlay">
-  <div class="panel" style="min-width:420px">
+  <div class="panel" style="">
     <h2>🏆 Tournaments</h2>
     <div id="tournament-login-required" class="hidden">
       <p style="color:#ff9966">Please login to join or create tournaments.</p>
@@ -390,7 +437,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- TOURNAMENT CREATE -->
 <div class="overlay hidden" id="tournament-create-overlay">
-  <div class="panel" style="min-width:360px">
+  <div class="panel" style="">
     <h2>🏆 New Tournament</h2>
     <input type="text" id="t-name" placeholder="Tournament name (optional)" maxlength="40">
     <div class="section-label">Number of Players</div>
@@ -407,7 +454,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 
 <!-- TOURNAMENT BRACKET -->
 <div class="overlay hidden" id="tournament-bracket-overlay">
-  <div class="panel" style="min-width:460px">
+  <div class="panel" style="">
     <h2>🏆 <span id="bracket-t-name">Tournament</span></h2>
     <div id="bracket-status-label" style="color:#9977cc;font-size:.85rem;margin-bottom:10px;"></div>
     <div id="bracket-players-section">
@@ -1209,6 +1256,27 @@ buildTCPicker('mp-tc-grid');
 selectTSize(4);
 
 document.getElementById('canvas').addEventListener('click',onCanvasClick);
+
+// ── Touch support for 3D board ────────────────────────────────────────────────
+let touchStartX=0,touchStartY=0,touchMoved=false;
+document.getElementById('canvas').addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  touchStartX=t.clientX;touchStartY=t.clientY;touchMoved=false;
+},{passive:false});
+document.getElementById('canvas').addEventListener('touchmove',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  if(Math.abs(t.clientX-touchStartX)>8||Math.abs(t.clientY-touchStartY)>8)touchMoved=true;
+},{passive:false});
+document.getElementById('canvas').addEventListener('touchend',e=>{
+  e.preventDefault();
+  if(touchMoved)return; // was a swipe/drag, ignore
+  const t=e.changedTouches[0];
+  // Synthesise a click-like event with clientX/Y
+  onCanvasClick({clientX:t.clientX,clientY:t.clientY});
+},{passive:false});
+
 document.getElementById('mp-join-code').addEventListener('keydown',e=>{if(e.key==='Enter')doJoinRoom();});
 document.getElementById('login-pin').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 </script>
