@@ -531,6 +531,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     <div style="margin-top:16px;width:100%;height:4px;background:#1a1040;border-radius:2px;overflow:hidden;">
       <div id="reconnect-bar" style="height:100%;background:linear-gradient(90deg,#7744cc,#aa55ff);width:0%;transition:width 1s linear;"></div>
     </div>
+    <button class="btn btn-secondary" style="margin-top:20px;font-size:.82rem;" onclick="cancelReconnect()">Return to Menu</button>
   </div>
 </div>
 
@@ -602,9 +603,10 @@ function clearSession(){localStorage.removeItem('chess3d_session');}
 function getSession(){try{return JSON.parse(localStorage.getItem('chess3d_session'));}catch{return null;}}
 
 // Reconnect token — saved when game starts, cleared on clean exit
-function saveReconnectToken(code,color,token){localStorage.setItem('chess3d_reconnect',JSON.stringify({code,color,token,expiry:Date.now()+90000}));}
+function saveReconnectToken(code,color,token){localStorage.setItem('chess3d_reconnect',JSON.stringify({code,color,token,expiry:Date.now()+7200000}));} // 2-hour expiry so long games can reconnect
 function clearReconnectToken(){localStorage.removeItem('chess3d_reconnect');}
 function getReconnectToken(){try{const d=JSON.parse(localStorage.getItem('chess3d_reconnect')||'null');return(d&&d.expiry>Date.now())?d:null;}catch{return null;}}
+function cancelReconnect(){clearReconnectToken();document.getElementById('reconnect-overlay').classList.add('hidden');show('menu');}
 
 // ── Game State ────────────────────────────────────────────────────────────────
 let socket,playerColor,roomCode;
@@ -1437,11 +1439,20 @@ function initSocket(){
     if(rc){
       // Show reconnecting overlay with animated bar
       document.getElementById('reconnect-overlay').classList.remove('hidden');
+      document.getElementById('reconnect-bar').style.width='0%';
       let pct=0;
-      const barAnim=setInterval(()=>{pct=Math.min(pct+2,90);document.getElementById('reconnect-bar').style.width=pct+'%';},100);
+      const barAnim=setInterval(()=>{pct=Math.min(pct+1.5,90);document.getElementById('reconnect-bar').style.width=pct+'%';},120);
       socket.emit('rejoin_game',{code:rc.code,color:rc.color,token:rc.token});
-      // If rejoin_failed fires, barAnim will stop via that handler; also stop after 5s safety
-      setTimeout(()=>clearInterval(barAnim),5000);
+      // Auto-dismiss after 8s if server never responds (e.g. redeploying)
+      const autoCancel=setTimeout(()=>{
+        clearInterval(barAnim);
+        clearReconnectToken();
+        document.getElementById('reconnect-overlay').classList.add('hidden');
+        show('menu');
+      },8000);
+      // Store so rejoin handlers can cancel it
+      window._reconnectAutoCancel=autoCancel;
+      window._reconnectBarAnim=barAnim;
       return;
     }
     // Priority 2: rejoin pre-game waiting room
@@ -1507,15 +1518,22 @@ function initSocket(){
 
   // We successfully rejoined an active game
   socket.on('game_rejoined',({color,code,whiteName,blackName})=>{
+    if(window._reconnectAutoCancel){clearTimeout(window._reconnectAutoCancel);window._reconnectAutoCancel=null;}
+    if(window._reconnectBarAnim){clearInterval(window._reconnectBarAnim);window._reconnectBarAnim=null;}
     playerColor=color;roomCode=code;
     myNameVal=color==='white'?whiteName:blackName;
     oppNameVal=color==='white'?blackName:whiteName;
-    document.getElementById('reconnect-overlay').classList.add('hidden');
-    show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,false);
+    document.getElementById('reconnect-bar').style.width='100%';
+    setTimeout(()=>{
+      document.getElementById('reconnect-overlay').classList.add('hidden');
+      show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,false);
+    },400);
   });
 
-  // Rejoin attempt failed (game gone, token invalid, etc.)
+  // Rejoin attempt failed (game gone, token invalid, etc.) — silently go to menu
   socket.on('rejoin_failed',(msg)=>{
+    if(window._reconnectAutoCancel){clearTimeout(window._reconnectAutoCancel);window._reconnectAutoCancel=null;}
+    if(window._reconnectBarAnim){clearInterval(window._reconnectBarAnim);window._reconnectBarAnim=null;}
     clearReconnectToken();
     document.getElementById('reconnect-overlay').classList.add('hidden');
     show('menu');
