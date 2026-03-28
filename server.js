@@ -261,6 +261,25 @@ function stopClocks(room) {
   if (room.clocks&&room.clocks.interval){clearInterval(room.clocks.interval);room.clocks.interval=null;}
 }
 
+function resumeClocks(room) {
+  // Restart the tick interval WITHOUT resetting clock times (used after mid-game rejoin)
+  if (!room.clocks||!room.timeControl) return;
+  if (room.clocks.interval){clearInterval(room.clocks.interval);room.clocks.interval=null;}
+  room.clocks.lastTick=Date.now();
+  room.clocks.interval=setInterval(()=>{
+    if (!room.clocks||!room.game) return;
+    const g=room.game; if (g.status!=='playing'&&g.status!=='check'){stopClocks(room);return;}
+    const elapsed=Date.now()-room.clocks.lastTick; const turn=g.turn;
+    const tw=turn==='white'?Math.max(0,room.clocks.white-elapsed):room.clocks.white;
+    const tb=turn==='black'?Math.max(0,room.clocks.black-elapsed):room.clocks.black;
+    room.clocks.lastTick=Date.now();
+    room.clocks.white=tw; room.clocks.black=tb;
+    io.to(room.code).emit('time_update',{white:tw,black:tb});
+    if (tw<=0&&turn==='white'){room.clocks.white=0;g.status='timeout';g.winner='black';stopClocks(room);io.to(room.code).emit('timeout',{loser:'white',winner:'black'});saveGameLog(room,'timeout');}
+    else if (tb<=0&&turn==='black'){room.clocks.black=0;g.status='timeout';g.winner='white';stopClocks(room);io.to(room.code).emit('timeout',{loser:'black',winner:'white'});saveGameLog(room,'timeout');}
+  },500);
+}
+
 function tickClock(room) {
   if (!room.clocks||!room.game) return;
   const elapsed=Date.now()-room.clocks.lastTick;
@@ -353,7 +372,9 @@ function startGame(room){
   io.to(room.code).emit('game_start',{
     whiteSocketId:room.white, blackSocketId:room.black,
     code:room.code, whiteName:room.names.white, blackName:room.names.black, timeControl:room.timeControl,
-    reconnectTokens:room.reconnectTokens
+    reconnectTokens:room.reconnectTokens,
+    mode:room.mode,
+    tournamentId:room.tournamentId||null
   });
   emitState(room);
   if (room.mode==='pvc'&&room.ai.color==='white') setTimeout(()=>doAiMove(room),700);
@@ -853,8 +874,8 @@ io.on('connection', (socket) => {
     if(color==='white'){room.white=socket.id;if(sessionEmail)room.whiteEmail=sessionEmail;}
     else{room.black=socket.id;if(sessionEmail)room.blackEmail=sessionEmail;}
     socket.join(room.code);
-    // Resume clocks from where they paused
-    if(room.clocks){room.clocks.lastTick=Date.now();startClocks(room);}
+    // Resume clocks from where they paused (resumeClocks does NOT reset times)
+    if(room.clocks) resumeClocks(room);
     // Send current game state to the rejoining player
     socket.emit('game_rejoined',{color,code:room.code,whiteName:room.names.white,blackName:room.names.black,timeControl:room.timeControl,reconnectToken:token});
     emitState(room);

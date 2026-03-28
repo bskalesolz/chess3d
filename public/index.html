@@ -90,7 +90,9 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 .hud-clock.active{color:#88ffcc;}
 .hud-clock.urgent{color:#ff4433;animation:urgentPulse .8s infinite;}
 @keyframes urgentPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
-.hud-center{display:flex;align-items:center;justify-content:center;flex:1;padding:0 10px;}
+.hud-center{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:0 10px;gap:4px;}
+#voice-controls{display:flex;gap:6px;pointer-events:all;}
+#voice-controls.hidden{display:none!important;}
 #turn-indicator{background:rgba(8,6,22,.90);border:1px solid #9966ff44;border-radius:18px;padding:7px 18px;font-size:.85rem;color:#cc99ff;letter-spacing:1px;backdrop-filter:blur(8px);white-space:nowrap;transition:color .3s;}
 
 /* ── Promotion ── */
@@ -500,7 +502,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
   </div>
   <div class="hud-center">
     <div id="turn-indicator">—</div>
-    <div id="voice-controls" class="hidden" style="display:flex;gap:6px;margin-top:6px;pointer-events:all;">
+    <div id="voice-controls" class="hidden">
       <button id="mic-btn" onclick="toggleMic()" title="Toggle microphone" style="background:rgba(8,6,22,.88);border:1px solid #6644cc55;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:1.1rem;color:#cc99ff;transition:all .2s;">🎤</button>
       <button id="spk-btn" onclick="toggleSpeaker()" title="Toggle speaker" style="background:rgba(8,6,22,.88);border:1px solid #6644cc55;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:1.1rem;color:#cc99ff;transition:all .2s;">🔊</button>
       <span id="voice-status" style="font-size:.65rem;color:#7755aa;align-self:center;"></span>
@@ -606,7 +608,18 @@ function getSession(){try{return JSON.parse(localStorage.getItem('chess3d_sessio
 function saveReconnectToken(code,color,token){localStorage.setItem('chess3d_reconnect',JSON.stringify({code,color,token,expiry:Date.now()+7200000}));} // 2-hour expiry so long games can reconnect
 function clearReconnectToken(){localStorage.removeItem('chess3d_reconnect');}
 function getReconnectToken(){try{const d=JSON.parse(localStorage.getItem('chess3d_reconnect')||'null');return(d&&d.expiry>Date.now())?d:null;}catch{return null;}}
-function cancelReconnect(){clearReconnectToken();document.getElementById('reconnect-overlay').classList.add('hidden');show('menu');}
+function cancelReconnect(){
+  if(window._reconnectAutoCancel){clearTimeout(window._reconnectAutoCancel);window._reconnectAutoCancel=null;}
+  if(window._reconnectBarAnim){clearInterval(window._reconnectBarAnim);window._reconnectBarAnim=null;}
+  clearReconnectToken();
+  document.getElementById('reconnect-overlay').classList.add('hidden');
+  show('menu');
+  // The connect handler returned early (skipped session restore) — do it now
+  const sess=getSession();
+  if(socket&&socket.connected&&sess&&sess.email&&sess.pin){
+    socket.emit('auth:restore_session',{email:sess.email,pin:sess.pin});
+  }
+}
 
 // ── Game State ────────────────────────────────────────────────────────────────
 let socket,playerColor,roomCode;
@@ -1469,22 +1482,31 @@ function initSocket(){
     oppNameVal=yourColor==='white'?blackName:whiteName;
     playToss(yourColor,whiteName,blackName);
   });
-  socket.on('game_start',({whiteSocketId,blackSocketId,code,whiteName,blackName,timeControl,reconnectTokens})=>{
+  socket.on('game_start',({whiteSocketId,blackSocketId,code,whiteName,blackName,timeControl,reconnectTokens,mode,tournamentId})=>{
     const color=socket.id===whiteSocketId?'white':'black';
     playerColor=color;roomCode=code;
     myNameVal=color==='white'?whiteName:blackName;
     oppNameVal=color==='white'?blackName:whiteName;
     prevCaptureCount=0;prevLastMove=null;oppEmail=null;
-    if(reconnectTokens&&reconnectTokens[color])saveReconnectToken(code,color,reconnectTokens[color]);
+    // Only save reconnect token for multiplayer games (PvC rooms are deleted on disconnect)
+    if(mode==='multiplayer'&&reconnectTokens&&reconnectTokens[color])saveReconnectToken(code,color,reconnectTokens[color]);
+    else clearReconnectToken(); // clear any stale PvC token
     document.getElementById('gameover-overlay').classList.add('hidden');
     document.getElementById('opp-reconnect-overlay').classList.add('hidden');
     document.getElementById('reconnect-overlay').classList.add('hidden');
     document.getElementById('rematch-status').textContent='';
+    // Hide rematch button for tournament games
+    const rematchBtn=document.getElementById('rematch-btn');
+    if(rematchBtn)rematchBtn.style.display=tournamentId?'none':'block';
     setTimeout(()=>{
       show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,true);
       // Show voice controls for multiplayer games only
-      document.getElementById('voice-controls').classList.remove('hidden');
-      updateVoiceUI();
+      if(mode==='multiplayer'){
+        document.getElementById('voice-controls').classList.remove('hidden');
+        updateVoiceUI();
+      } else {
+        document.getElementById('voice-controls').classList.add('hidden');
+      }
     },900);
   });
 
@@ -1543,10 +1565,6 @@ function initSocket(){
     // Extract opponent email for friend request feature
     if(playerColor&&(state.whiteEmail||state.blackEmail)){
       oppEmail=playerColor==='white'?state.blackEmail:state.whiteEmail;
-    }
-    // Hide voice controls for PvC games
-    if(state.mode&&state.mode!=='multiplayer'){
-      document.getElementById('voice-controls').classList.add('hidden');
     }
     // Play sounds on new move
     const newCaptureCount=(state.capturedByWhite||[]).length+(state.capturedByBlack||[]).length;
