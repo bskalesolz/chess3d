@@ -705,8 +705,13 @@ io.on('connection', (socket) => {
     if(room.mode!=='multiplayer'){socket.emit('join_error','Room not found');return;}
     if(room.game){socket.emit('join_error','Game already started');return;}
     if(room.black!==null&&room.black!==undefined){socket.emit('join_error','Room is full');return;}
+    // Clear any pending cleanup timer since someone joined
+    if(room._cleanupTimer){clearTimeout(room._cleanupTimer);room._cleanupTimer=null;}
+    // If creator socket dropped but room survived, creator slot may be null — still start game
+    // (creator will see "opponent disconnected" if they don't reconnect in time)
     socket.join(room.code);
-    doToss(room,room.white,room._creatorName||'Player 1',socket.id,name||'Player 2',room.whiteEmail,sessionEmail||null);
+    const creatorId=room.white||'__gone__';
+    doToss(room,creatorId,room._creatorName||'Player 1',socket.id,name||'Player 2',room.whiteEmail,sessionEmail||null);
   });
 
   socket.on('quick_match',({name,timeControl})=>{
@@ -816,6 +821,17 @@ io.on('connection', (socket) => {
     } else { socket.to(room.code).emit('rematch_requested'); }
   });
 
+  socket.on('rejoin_room',({code})=>{
+    // Creator reconnects to their waiting room after a socket drop
+    const room=rooms.get((code||'').toUpperCase().trim());
+    if(!room||room.game) return; // room gone or game started — can't rejoin
+    if(room._creatorReconnectEmail&&room._creatorReconnectEmail===sessionEmail){
+      room.white=socket.id; room.whiteEmail=sessionEmail;
+      socket.join(room.code);
+      socket.emit('room_created',{code:room.code});
+    }
+  });
+
   socket.on('disconnect',()=>{
     console.log('[-]',socket.id);
     if(sessionEmail&&onlineSessions.get(sessionEmail)===socket.id){
@@ -824,7 +840,20 @@ io.on('connection', (socket) => {
     }
     for(const[key,e]of waitingQueues){if(e.socket.id===socket.id){waitingQueues.delete(key);break;}}
     const room=getRoomBySocket(socket.id);
-    if(room){stopClocks(room);socket.to(room.code).emit('opponent_disconnected');rooms.delete(room.code);}
+    if(room){
+      stopClocks(room);
+      if(room.game){
+        // Game was in progress — notify opponent, delete room
+        socket.to(room.code).emit('opponent_disconnected');
+        rooms.delete(room.code);
+      } else {
+        // Game not yet started — keep room alive for 90s so joiner can still connect
+        // Null out the disconnected socket slot so getRoomBySocket won't find stale id
+        if(room.white===socket.id){ room._creatorReconnectEmail=room.whiteEmail; room.white=null; }
+        if(room.black===socket.id){ room.black=null; }
+        room._cleanupTimer=setTimeout(()=>{ if(rooms.has(room.code)&&!room.game) rooms.delete(room.code); },90000);
+      }
+    }
   });
 });
 
