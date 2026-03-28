@@ -599,6 +599,17 @@ function buildPiece(type,color){
   g.userData.isPiece=true;return g;
 }
 
+// ── Camera helpers ────────────────────────────────────────────────────────────
+function mobileFov(){
+  const aspect=innerWidth/innerHeight;
+  if(aspect>=1) return 44; // landscape / desktop — normal
+  // Portrait: widen FOV so horizontal board fits
+  // Target horizontal FOV ~52deg; back-calculate vertical FOV from aspect
+  const hFovRad=52*Math.PI/180;
+  const vFovDeg=2*Math.atan(Math.tan(hFovRad/2)/aspect)*180/Math.PI;
+  return Math.min(vFovDeg,100); // cap at 100 so it doesn't look fisheye
+}
+
 // ── Scene ─────────────────────────────────────────────────────────────────────
 function initScene(){
   scene=new THREE.Scene();scene.background=new THREE.Color(0x09090f);scene.fog=new THREE.FogExp2(0x09090f,.048);
@@ -606,7 +617,7 @@ function initScene(){
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
   renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
   renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.2;
-  camera=new THREE.PerspectiveCamera(44,innerWidth/innerHeight,.1,100);
+  camera=new THREE.PerspectiveCamera(mobileFov(),innerWidth/innerHeight,.1,100);
   camera.position.set(0,14,.5);camera.lookAt(0,0,0);
   raycaster=new THREE.Raycaster();
   scene.add(new THREE.AmbientLight(0x99aabb,.65));
@@ -626,7 +637,13 @@ function initScene(){
   }
   highlightGroup=new THREE.Group();scene.add(highlightGroup);
   piecesGroup=new THREE.Group();scene.add(piecesGroup);
-  window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+  window.addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight;
+    camera.fov=mobileFov();
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+    if(playerColor)setCamForColor(playerColor,false);
+  });
 }
 
 function makeLabelMesh(text){
@@ -679,8 +696,8 @@ function updateCamera(){
   if(t>=1)camAnim=null;
 }
 function setCamForColor(color,animate=true){
-  const isMobile=window.innerWidth<600;
-  const dist=isMobile?12.5:10; const height=isMobile?8.5:7.2;
+  const portrait=window.innerWidth<window.innerHeight;
+  const dist=portrait?9:10; const height=portrait?9:7.2;
   const pos=color==='white'?[0,height,dist]:[0,height,-dist];const look=[0,.5,0];
   if(animate)animateCam(pos,look,1800);else{camera.position.set(...pos);currentLookAt.set(...look);camera.lookAt(currentLookAt);}
 }
