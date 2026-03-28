@@ -335,7 +335,7 @@ function getColor(room,id){return room.white===id?'white':room.black===id?'black
 
 function emitState(room){
   const g=room.game;
-  io.to(room.code).emit('game_state',{board:g.board,turn:g.turn,status:g.status,winner:g.winner,lastMove:g.lastMove,capturedByWhite:g.capturedByWhite,capturedByBlack:g.capturedByBlack,inCheck:g.inCheck,checkKingPos:g.checkKingPos,timeWhite:room.clocks?room.clocks.white:null,timeBlack:room.clocks?room.clocks.black:null,whiteName:room.names.white,blackName:room.names.black});
+  io.to(room.code).emit('game_state',{board:g.board,turn:g.turn,status:g.status,winner:g.winner,lastMove:g.lastMove,capturedByWhite:g.capturedByWhite,capturedByBlack:g.capturedByBlack,inCheck:g.inCheck,checkKingPos:g.checkKingPos,timeWhite:room.clocks?room.clocks.white:null,timeBlack:room.clocks?room.clocks.black:null,whiteName:room.names.white,blackName:room.names.black,whiteEmail:room.whiteEmail||null,blackEmail:room.blackEmail||null,mode:room.mode});
 }
 
 function newGame(){
@@ -833,6 +833,12 @@ io.on('connection', (socket) => {
       room.rematchVotes=null; stopClocks(room);
       doToss(room,room.white,room.names.white,room.black,room.names.black,room.whiteEmail,room.blackEmail);
     } else { socket.to(room.code).emit('rematch_requested'); }
+  });
+
+  // ── WebRTC voice chat relay (server just forwards, no processing) ────────────
+  socket.on('voice:signal',(data)=>{
+    const room=getRoomBySocket(socket.id);
+    if(room) socket.to(room.code).emit('voice:signal',data);
   });
 
   socket.on('rejoin_game',({code,color,token})=>{

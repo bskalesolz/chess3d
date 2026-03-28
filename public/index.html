@@ -265,7 +265,12 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     <!-- Friends panel (shown when logged in) -->
     <div id="friends-panel" class="hidden">
       <hr class="sep">
-      <div class="section-label">Friends Online</div>
+      <div class="row" style="margin-bottom:6px;">
+        <input type="email" id="menu-add-friend-email" placeholder="Add friend by email…" style="margin:0;font-size:.82rem;padding:8px 10px;">
+        <button class="btn btn-primary btn-sm" onclick="menuAddFriend()" style="white-space:nowrap;">Add</button>
+      </div>
+      <div class="error-msg" id="menu-add-friend-error" style="min-height:12px;font-size:.76rem;"></div>
+      <div class="section-label" style="margin-top:2px;">Friends</div>
       <div class="friends-list-wrap" id="menu-friends-list">
         <div class="no-friends-msg">No friends yet — add some!</div>
       </div>
@@ -390,6 +395,14 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
       </label>
     </div>
     <p style="color:#554466;font-size:.78rem;text-align:left;margin-top:-4px">Highlights valid squares when you select a piece. Applies to all game modes.</p>
+    <div class="toggle-row" style="margin-top:8px">
+      <span class="toggle-label">🔊 Move sounds</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="toggle-sound" onchange="saveSettings()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <p style="color:#554466;font-size:.78rem;text-align:left;margin-top:-4px">Plays audio cues for moves, captures, checks and game results.</p>
     <button class="btn btn-secondary" onclick="show('menu')">← Back</button>
   </div>
 </div>
@@ -485,7 +498,14 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     <div class="hud-cap" id="cap-opp"></div>
     <div class="hud-clock" id="clock-opp"></div>
   </div>
-  <div class="hud-center"><div id="turn-indicator">—</div></div>
+  <div class="hud-center">
+    <div id="turn-indicator">—</div>
+    <div id="voice-controls" class="hidden" style="display:flex;gap:6px;margin-top:6px;pointer-events:all;">
+      <button id="mic-btn" onclick="toggleMic()" title="Toggle microphone" style="background:rgba(8,6,22,.88);border:1px solid #6644cc55;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:1.1rem;color:#cc99ff;transition:all .2s;">🎤</button>
+      <button id="spk-btn" onclick="toggleSpeaker()" title="Toggle speaker" style="background:rgba(8,6,22,.88);border:1px solid #6644cc55;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:1.1rem;color:#cc99ff;transition:all .2s;">🔊</button>
+      <span id="voice-status" style="font-size:.65rem;color:#7755aa;align-self:center;"></span>
+    </div>
+  </div>
   <div class="hud-panel" style="text-align:right">
     <h3>You</h3>
     <div class="hud-name" id="my-name">—</div>
@@ -531,7 +551,8 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
   <div class="panel">
     <h2 id="go-title">Game Over</h2>
     <p id="go-msg"></p>
-    <button class="btn btn-primary" id="rematch-btn" onclick="sendRematch()" style="margin-top:16px">🔄 Rematch</button>
+    <button id="add-opp-friend-btn" class="btn btn-secondary" style="display:none;margin-top:8px" onclick="addOpponentAsFriend()">🤝 Add <span id="add-opp-name"></span> as Friend</button>
+    <button class="btn btn-primary" id="rematch-btn" onclick="sendRematch()" style="margin-top:8px">🔄 Rematch</button>
     <button class="btn btn-secondary" onclick="backToMenu()">🏠 Main Menu</button>
     <p id="rematch-status" style="color:#9977ee;font-size:.85rem;min-height:16px;margin-top:6px;"></p>
   </div>
@@ -556,8 +577,19 @@ function levelLabel(n){return n<=1?'Beginner':n<=3?'Easy':n<=5?'Intermediate':n<
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 let showMovePredictions=true;
-function loadSettings(){showMovePredictions=localStorage.getItem('chess3d_dots')!=='false';document.getElementById('toggle-dots').checked=showMovePredictions;}
-function saveSettings(){showMovePredictions=document.getElementById('toggle-dots').checked;localStorage.setItem('chess3d_dots',showMovePredictions);}
+let soundEnabled=true;
+function loadSettings(){
+  showMovePredictions=localStorage.getItem('chess3d_dots')!=='false';
+  document.getElementById('toggle-dots').checked=showMovePredictions;
+  soundEnabled=localStorage.getItem('chess3d_sound')!=='false';
+  document.getElementById('toggle-sound').checked=soundEnabled;
+}
+function saveSettings(){
+  showMovePredictions=document.getElementById('toggle-dots').checked;
+  localStorage.setItem('chess3d_dots',showMovePredictions);
+  soundEnabled=document.getElementById('toggle-sound').checked;
+  localStorage.setItem('chess3d_sound',soundEnabled);
+}
 
 // ── Auth State ────────────────────────────────────────────────────────────────
 let currentUser=null; // {userId,name,email,gender,stats,gameLog,friends,incomingRequests}
@@ -581,7 +613,10 @@ let gameState=null;
 let myNameVal='You',oppNameVal='Opponent';
 let pendingTC=null,pendingLevel=5;
 let displayClocks={white:null,black:null};
-let oppReconnectInterval=null; // countdown interval when opponent disconnects
+let oppReconnectInterval=null;
+let oppEmail=null;           // opponent's email (for friend request after game)
+let prevCaptureCount=0;      // track captures for sound detection
+let prevLastMove=null;       // detect new moves for sound
 
 // ── Three.js ──────────────────────────────────────────────────────────────────
 let scene,camera,renderer,raycaster;
@@ -629,6 +664,111 @@ function buildPiece(type,color){
     add(new THREE.BoxGeometry(.30,.088,.088),M,0,1.24);
   }
   g.userData.isPiece=true;return g;
+}
+
+// ── Sound Engine (Web Audio API) ──────────────────────────────────────────────
+let AC=null;
+function getAC(){if(!AC)AC=new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();return AC;}
+function playChessSound(type){
+  if(!soundEnabled)return;
+  try{
+    const ctx=getAC();const now=ctx.currentTime;
+    const mkOsc=(freq,waveType,startT,dur,vol=0.18)=>{
+      const o=ctx.createOscillator();const g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);
+      o.type=waveType;o.frequency.setValueAtTime(freq,startT);
+      g.gain.setValueAtTime(vol,startT);g.gain.exponentialRampToValueAtTime(0.0001,startT+dur);
+      o.start(startT);o.stop(startT+dur+0.01);
+    };
+    if(type==='move'){
+      const o=ctx.createOscillator();const g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='triangle';
+      o.frequency.setValueAtTime(900,now);o.frequency.exponentialRampToValueAtTime(180,now+0.09);
+      g.gain.setValueAtTime(0.16,now);g.gain.exponentialRampToValueAtTime(0.0001,now+0.10);
+      o.start(now);o.stop(now+0.11);
+    } else if(type==='capture'){
+      const o=ctx.createOscillator();const g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='sawtooth';
+      o.frequency.setValueAtTime(420,now);o.frequency.exponentialRampToValueAtTime(90,now+0.14);
+      g.gain.setValueAtTime(0.22,now);g.gain.exponentialRampToValueAtTime(0.0001,now+0.16);
+      o.start(now);o.stop(now+0.17);
+    } else if(type==='check'){
+      mkOsc(1047,'sine',now,0.10,0.20);mkOsc(1319,'sine',now+0.14,0.10,0.20);
+    } else if(type==='win'){
+      [0,.15,.30,.48].forEach((d,i)=>mkOsc([523,659,784,1047][i],'sine',now+d,0.28,0.18));
+    } else if(type==='lose'){
+      [0,.20,.42].forEach((d,i)=>mkOsc([523,440,330][i],'sine',now+d,0.30,0.14));
+    } else if(type==='tick'){
+      mkOsc(1200,'sine',now,0.04,0.10);
+    }
+  }catch(e){}
+}
+
+// ── Voice Chat (WebRTC) ───────────────────────────────────────────────────────
+let peerConn=null,localStream=null,remoteAudio=null;
+let micMuted=false,speakerMuted=false,voiceActive=false;
+
+const ICE_CFG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+
+function updateVoiceUI(){
+  const mb=document.getElementById('mic-btn');
+  const sb=document.getElementById('spk-btn');
+  const vs=document.getElementById('voice-status');
+  if(mb){mb.textContent=micMuted?'🔇':'🎤';mb.style.borderColor=micMuted?'#ff4433':voiceActive?'#44ff99':'#6644cc55';}
+  if(sb){sb.textContent=speakerMuted?'🔈':'🔊';sb.style.borderColor=speakerMuted?'#ff4433':'#6644cc55';}
+  if(vs)vs.textContent=voiceActive?'● Live':'';
+}
+
+async function toggleMic(){
+  if(!voiceActive){
+    // Start voice chat
+    try{
+      localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+      peerConn=new RTCPeerConnection(ICE_CFG);
+      localStream.getTracks().forEach(t=>peerConn.addTrack(t,localStream));
+      peerConn.onicecandidate=e=>{if(e.candidate&&socket)socket.emit('voice:signal',{type:'ice',candidate:e.candidate});};
+      peerConn.ontrack=e=>{
+        if(!remoteAudio){remoteAudio=new Audio();remoteAudio.autoplay=true;}
+        remoteAudio.srcObject=e.streams[0];
+        voiceActive=true;updateVoiceUI();
+      };
+      peerConn.onconnectionstatechange=()=>{
+        if(peerConn&&(peerConn.connectionState==='failed'||peerConn.connectionState==='disconnected'))stopVoice();
+      };
+      // White initiates offer; black waits for signal
+      if(playerColor==='white'){
+        const offer=await peerConn.createOffer();
+        await peerConn.setLocalDescription(offer);
+        socket.emit('voice:signal',{type:'offer',sdp:peerConn.localDescription});
+      } else {
+        socket.emit('voice:signal',{type:'ready'});
+      }
+      micMuted=false;voiceActive=false;updateVoiceUI(); // will go true on ontrack
+      document.getElementById('voice-status').textContent='Connecting…';
+    }catch(err){
+      alert('Microphone access denied: '+err.message);return;
+    }
+  } else {
+    // Toggle mute
+    micMuted=!micMuted;
+    if(localStream)localStream.getAudioTracks().forEach(t=>t.enabled=!micMuted);
+    updateVoiceUI();
+  }
+}
+
+function toggleSpeaker(){
+  speakerMuted=!speakerMuted;
+  if(remoteAudio)remoteAudio.muted=speakerMuted;
+  updateVoiceUI();
+}
+
+function stopVoice(){
+  if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
+  if(peerConn){peerConn.close();peerConn=null;}
+  if(remoteAudio){remoteAudio.srcObject=null;remoteAudio=null;}
+  voiceActive=false;micMuted=false;speakerMuted=false;
+  updateVoiceUI();
+  document.getElementById('voice-controls').classList.add('hidden');
 }
 
 // ── Camera helpers ────────────────────────────────────────────────────────────
@@ -802,9 +942,19 @@ function showPromo(){
   for(const p of pieces){const btn=document.createElement('div');btn.className='promo-btn';btn.textContent=UNI[p];btn.onclick=()=>{socket.emit('promote',{piece:p});document.getElementById('promo-overlay').classList.add('hidden');};box.appendChild(btn);}
   document.getElementById('promo-overlay').classList.remove('hidden');
 }
-function showGameOver(title,msg,color){
+function showGameOver(title,msg,color,showAddFriend=false){
   document.getElementById('go-title').textContent=title;document.getElementById('go-title').style.color=color||'#cc99ff';
-  document.getElementById('go-msg').textContent=msg;document.getElementById('gameover-overlay').classList.remove('hidden');
+  document.getElementById('go-msg').textContent=msg;
+  // Show "Add Friend" button if opponent is registered and not already a friend
+  const addBtn=document.getElementById('add-opp-friend-btn');
+  const alreadyFriend=currentUser&&currentUser.friends&&oppEmail&&currentUser.friends.find(f=>f.email===oppEmail);
+  if(showAddFriend&&currentUser&&oppEmail&&!alreadyFriend&&oppEmail!==currentUser.email){
+    document.getElementById('add-opp-name').textContent=oppNameVal;
+    addBtn.style.display='block';
+  } else {
+    addBtn.style.display='none';
+  }
+  document.getElementById('gameover-overlay').classList.remove('hidden');
 }
 
 // ── Toss animation ────────────────────────────────────────────────────────────
@@ -961,6 +1111,21 @@ function renderIncomingRequests(requests){
     row.innerHTML=`<span class="friend-req-name">${r.name} <span style="color:#554466;font-size:.75rem">${r.email}</span></span><button class="btn btn-primary btn-sm" onclick="acceptRequest('${r.email}')">Accept</button><button class="btn btn-secondary btn-sm" style="margin-left:4px" onclick="declineRequest('${r.email}')">Decline</button>`;
     list.appendChild(row);
   });
+}
+
+function menuAddFriend(){
+  const email=document.getElementById('menu-add-friend-email').value.trim().toLowerCase();
+  const err=document.getElementById('menu-add-friend-error');
+  err.textContent='';if(!email){err.textContent='Enter an email.';return;}
+  socket.emit('friends:send_request',{toEmail:email});
+  document.getElementById('menu-add-friend-email').value='';
+}
+
+function addOpponentAsFriend(){
+  if(!oppEmail)return;
+  socket.emit('friends:send_request',{toEmail:oppEmail});
+  document.getElementById('add-opp-friend-btn').style.display='none';
+  document.getElementById('rematch-status').textContent='Friend request sent!';
 }
 
 function sendFriendRequest(){
@@ -1146,6 +1311,8 @@ function copyRoomCode(){
 function sendRematch(){socket.emit('rematch');document.getElementById('rematch-status').textContent='Rematch requested…';}
 function backToMenu(){
   clearReconnectToken();
+  stopVoice();
+  oppEmail=null;prevCaptureCount=0;prevLastMove=null;
   if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
   show('menu');gameState=null;playerColor=null;roomCode=null;displayClocks={white:null,black:null};
   deselect();if(socket){socket.disconnect();socket=null;}
@@ -1198,14 +1365,22 @@ function initSocket(){
     }
   });
   socket.on('friends:request_sent',({toName})=>{
+    // Update friends overlay field
     document.getElementById('friends-error').textContent='';
     document.getElementById('add-friend-email').value='';
-    // Small confirmation
     const err=document.getElementById('friends-error');
     err.style.color='#88ffcc';err.textContent=`Request sent to ${toName}!`;
     setTimeout(()=>{err.style.color='';err.textContent='';},3000);
+    // Update inline menu field too
+    const menuErr=document.getElementById('menu-add-friend-error');
+    if(menuErr){menuErr.style.color='#88ffcc';menuErr.textContent=`Friend request sent to ${toName}!`;setTimeout(()=>{menuErr.style.color='';menuErr.textContent='';},3000);}
   });
-  socket.on('friends:error',(msg)=>{document.getElementById('friends-error').textContent=msg;});
+  socket.on('friends:error',(msg)=>{
+    document.getElementById('friends-error').textContent=msg;
+    // Also show in inline menu field
+    const menuErr=document.getElementById('menu-add-friend-error');
+    if(menuErr){menuErr.style.color='#ff7766';menuErr.textContent=msg;setTimeout(()=>{menuErr.textContent='';},3000);}
+  });
   socket.on('friends:list_updated',({friends})=>{
     if(currentUser){currentUser.friends=friends;renderMenuFriends(friends);renderFriendsFull(friends);}
   });
@@ -1288,13 +1463,18 @@ function initSocket(){
     playerColor=color;roomCode=code;
     myNameVal=color==='white'?whiteName:blackName;
     oppNameVal=color==='white'?blackName:whiteName;
-    // Save reconnect token so we can rejoin if we accidentally leave
+    prevCaptureCount=0;prevLastMove=null;oppEmail=null;
     if(reconnectTokens&&reconnectTokens[color])saveReconnectToken(code,color,reconnectTokens[color]);
     document.getElementById('gameover-overlay').classList.add('hidden');
     document.getElementById('opp-reconnect-overlay').classList.add('hidden');
     document.getElementById('reconnect-overlay').classList.add('hidden');
     document.getElementById('rematch-status').textContent='';
-    setTimeout(()=>{show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,true);},900);
+    setTimeout(()=>{
+      show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,true);
+      // Show voice controls for multiplayer games only
+      document.getElementById('voice-controls').classList.remove('hidden');
+      updateVoiceUI();
+    },900);
   });
 
   // Opponent dropped mid-game — show countdown
@@ -1342,11 +1522,40 @@ function initSocket(){
   });
   socket.on('game_state',(state)=>{
     gameState=state;renderPieces(state.board);applyHighlights(state.board);updateHUD();
+    // Extract opponent email for friend request feature
+    if(playerColor&&(state.whiteEmail||state.blackEmail)){
+      oppEmail=playerColor==='white'?state.blackEmail:state.whiteEmail;
+    }
+    // Hide voice controls for PvC games
+    if(state.mode&&state.mode!=='multiplayer'){
+      document.getElementById('voice-controls').classList.add('hidden');
+    }
+    // Play sounds on new move
+    const newCaptureCount=(state.capturedByWhite||[]).length+(state.capturedByBlack||[]).length;
+    if(state.lastMove&&JSON.stringify(state.lastMove)!==JSON.stringify(prevLastMove)){
+      if(state.status==='checkmate'||state.status==='stalemate'){
+        // handled below with win/lose
+      } else if(state.inCheck){
+        playChessSound('check');
+      } else if(newCaptureCount>prevCaptureCount){
+        playChessSound('capture');
+      } else {
+        playChessSound('move');
+      }
+      prevLastMove=state.lastMove;
+    }
+    prevCaptureCount=newCaptureCount;
     if(state.status==='checkmate'||state.status==='stalemate'){
       clearReconnectToken(); // game is over, no need to rejoin
+      const isMP=state.mode==='multiplayer';
       setTimeout(()=>{
-        if(state.status==='checkmate'){const won=state.winner===playerColor;showGameOver(won?'🏆 Victory!':'💀 Defeat',`Checkmate — ${state.winner} wins!`,won?'#88ff99':'#ff8866');}
-        else showGameOver('⚖ Draw','Stalemate — no legal moves.','#cccc88');
+        if(state.status==='checkmate'){
+          const won=state.winner===playerColor;
+          playChessSound(won?'win':'lose');
+          showGameOver(won?'🏆 Victory!':'💀 Defeat',`Checkmate — ${state.winner} wins!`,won?'#88ff99':'#ff8866',isMP);
+        } else {
+          showGameOver('⚖ Draw','Stalemate — no legal moves.','#cccc88',isMP);
+        }
         if(currentUser){
           if(state.status==='checkmate'){if(state.winner===playerColor)currentUser.stats.wins++;else currentUser.stats.losses++;}
           else currentUser.stats.draws++;
@@ -1372,6 +1581,46 @@ function initSocket(){
   socket.on('rematch_requested',()=>{document.getElementById('rematch-status').textContent='Opponent wants a rematch!';});
   socket.on('opponent_disconnected',()=>showGameOver('⚡ Opponent Left','Your opponent disconnected.','#ccaa55'));
   socket.on('join_error',msg=>{document.getElementById('mp-error').textContent=msg;});
+
+  // ── WebRTC voice signaling ──────────────────────────────────────────────────
+  socket.on('voice:signal',async(data)=>{
+    try{
+      if(data.type==='ready'){
+        // Black is ready — white sends offer
+        if(playerColor==='white'&&peerConn){
+          const offer=await peerConn.createOffer();
+          await peerConn.setLocalDescription(offer);
+          socket.emit('voice:signal',{type:'offer',sdp:peerConn.localDescription});
+        }
+      } else if(data.type==='offer'){
+        // Black receives offer from white
+        if(!peerConn){
+          localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+          peerConn=new RTCPeerConnection(ICE_CFG);
+          localStream.getTracks().forEach(t=>peerConn.addTrack(t,localStream));
+          peerConn.onicecandidate=e=>{if(e.candidate&&socket)socket.emit('voice:signal',{type:'ice',candidate:e.candidate});};
+          peerConn.ontrack=e=>{
+            if(!remoteAudio){remoteAudio=new Audio();remoteAudio.autoplay=true;}
+            remoteAudio.srcObject=e.streams[0];
+            voiceActive=true;updateVoiceUI();
+            document.getElementById('voice-status').textContent='🔴 Live';
+          };
+        }
+        await peerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer=await peerConn.createAnswer();
+        await peerConn.setLocalDescription(answer);
+        socket.emit('voice:signal',{type:'answer',sdp:peerConn.localDescription});
+        micMuted=false;voiceActive=false;
+        document.getElementById('voice-status').textContent='Connecting…';
+      } else if(data.type==='answer'){
+        // White receives answer from black
+        if(peerConn)await peerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      } else if(data.type==='ice'){
+        // Both sides relay ICE candidates
+        if(peerConn&&data.candidate)await peerConn.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    }catch(err){console.warn('voice:signal error',err);}
+  });
 
   // Restore session if saved
   const sess=getSession();
