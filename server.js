@@ -342,8 +342,11 @@ function startGame(room){
   if (!rooms.has(room.code)) return;
   room.game=newGame();
   startClocks(room);
-  if (room.white!=='AI'){const s=io.sockets.sockets.get(room.white);if(s)s.emit('game_start',{color:'white',code:room.code,whiteName:room.names.white,blackName:room.names.black,timeControl:room.timeControl});}
-  if (room.black!=='AI'){const s=io.sockets.sockets.get(room.black);if(s)s.emit('game_start',{color:'black',code:room.code,whiteName:room.names.white,blackName:room.names.black,timeControl:room.timeControl});}
+  // Broadcast to room channel with both socket IDs so each client picks its own color
+  io.to(room.code).emit('game_start',{
+    whiteSocketId:room.white, blackSocketId:room.black,
+    code:room.code, whiteName:room.names.white, blackName:room.names.black, timeControl:room.timeControl
+  });
   emitState(room);
   if (room.mode==='pvc'&&room.ai.color==='white') setTimeout(()=>doAiMove(room),700);
 }
@@ -354,9 +357,12 @@ function doToss(room,p1Id,p1Name,p2Id,p2Name,p1Email,p2Email){
   room.names.white=p1White?p1Name:p2Name; room.names.black=p1White?p2Name:p1Name;
   room.whiteEmail=p1White?(p1Email||null):(p2Email||null);
   room.blackEmail=p1White?(p2Email||null):(p1Email||null);
-  const s1=io.sockets.sockets.get(p1Id); const s2=io.sockets.sockets.get(p2Id);
-  if(s1)s1.emit('toss_result',{yourColor:p1White?'white':'black',whiteName:room.names.white,blackName:room.names.black});
-  if(s2)s2.emit('toss_result',{yourColor:p1White?'black':'white',whiteName:room.names.white,blackName:room.names.black});
+  // Broadcast to the whole room channel so both players receive it regardless of socket ID changes.
+  // Each client uses its own socket.id to determine which color it got.
+  io.to(room.code).emit('toss_result',{
+    whiteSocketId:room.white, blackSocketId:room.black,
+    whiteName:room.names.white, blackName:room.names.black
+  });
   setTimeout(()=>startGame(room),3500);
 }
 
@@ -744,7 +750,7 @@ io.on('connection', (socket) => {
     if(playerWhite)room.whiteEmail=sessionEmail||null; else room.blackEmail=sessionEmail||null;
     room.ai={color:aiColor,level:aiLevel};
     socket.join(room.code);
-    socket.emit('toss_result',{yourColor:playerColor,whiteName:room.names.white,blackName:room.names.black});
+    io.to(room.code).emit('toss_result',{whiteSocketId:room.white,blackSocketId:room.black,whiteName:room.names.white,blackName:room.names.black});
     setTimeout(()=>startGame(room),3500);
   });
 
@@ -810,7 +816,7 @@ io.on('connection', (socket) => {
       room.ai.color=newAi;
       if(newPc==='white'){room.white=socket.id;room.black='AI';room.names.white=room.names[pc];room.names.black='Computer';}
       else{room.white='AI';room.black=socket.id;room.names.white='Computer';room.names.black=room.names[pc];}
-      socket.emit('toss_result',{yourColor:newPc,whiteName:room.names.white,blackName:room.names.black});
+      io.to(room.code).emit('toss_result',{whiteSocketId:room.white,blackSocketId:room.black,whiteName:room.names.white,blackName:room.names.black});
       setTimeout(()=>startGame(room),3500); return;
     }
     if(!room.rematchVotes)room.rematchVotes=new Set();

@@ -1230,11 +1230,15 @@ function initSocket(){
   });
   socket.on('room_created',({code})=>{roomCode=code;show('waiting');document.getElementById('waiting-code').textContent=code;});
   socket.on('waiting',({code})=>{if(code)roomCode=code;show('waiting');document.getElementById('waiting-code').textContent=code||'------';});
-  socket.on('toss_result',({yourColor,whiteName,blackName})=>{
-    playerColor=yourColor;oppNameVal=yourColor==='white'?blackName:whiteName;
+  socket.on('toss_result',({whiteSocketId,blackSocketId,whiteName,blackName})=>{
+    // Determine our color from our socket id
+    const yourColor=socket.id===whiteSocketId?'white':'black';
+    playerColor=yourColor;
+    oppNameVal=yourColor==='white'?blackName:whiteName;
     playToss(yourColor,whiteName,blackName);
   });
-  socket.on('game_start',({color,code,whiteName,blackName})=>{
+  socket.on('game_start',({whiteSocketId,blackSocketId,code,whiteName,blackName,timeControl})=>{
+    const color=socket.id===whiteSocketId?'white':'black';
     playerColor=color;roomCode=code;
     myNameVal=color==='white'?whiteName:blackName;
     oppNameVal=color==='white'?blackName:whiteName;
