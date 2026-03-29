@@ -205,6 +205,27 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
   .hud-clock{font-size:.85rem;}
   .hud-name{font-size:.68rem;}
 }
+
+/* ── Active game banner ── */
+#active-game-banner{background:linear-gradient(135deg,#1a0e44,#2a1060);border:1px solid #9966ff55;border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
+#active-game-banner.hidden{display:none;}
+#active-game-banner.urgent{border-color:#ff6644!important;animation:urgentPulse .8s infinite;}
+
+/* ── Forfeit button ── */
+#forfeit-btn{position:absolute;bottom:20px;right:16px;z-index:7;background:rgba(8,6,22,.88);border:1px solid #ff776644;border-radius:8px;padding:7px 14px;color:#ff9977;font-size:.78rem;cursor:pointer;backdrop-filter:blur(6px);transition:all .18s;pointer-events:all;}
+#forfeit-btn:hover{background:#ff77661a;border-color:#ff7766;}
+#forfeit-btn.hidden{display:none;}
+
+/* ── Away warning banner ── */
+#away-banner{position:absolute;top:74px;left:50%;transform:translateX(-50%);z-index:8;background:rgba(180,80,0,.92);border:1px solid #ff994466;border-radius:10px;padding:7px 20px;text-align:center;pointer-events:none;backdrop-filter:blur(6px);white-space:nowrap;}
+#away-banner.hidden{display:none;}
+
+/* ── Leave game confirm ── */
+#leave-confirm-modal{position:absolute;inset:0;background:rgba(0,0,0,.82);display:flex;align-items:center;justify-content:center;z-index:50;}
+#leave-confirm-modal.hidden{display:none;}
+#leave-confirm-box{background:linear-gradient(160deg,#11102e,#1c1042);border:1px solid #9966ff55;border-radius:16px;padding:28px 32px;text-align:center;min-width:min(300px,88vw);box-shadow:0 0 60px #2200aa44;}
+#leave-confirm-box h3{color:#c8a8ff;font-size:1.1rem;margin-bottom:8px;}
+#leave-confirm-box p{color:#887799;font-size:.84rem;margin-bottom:18px;line-height:1.5;}
 </style>
 </head>
 <body>
@@ -245,6 +266,16 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     </div>
     <hr class="sep">
 
+    <!-- Active Game Banner -->
+    <div id="active-game-banner" class="hidden">
+      <div>
+        <div style="font-size:.72rem;color:#9966ff;letter-spacing:1px;text-transform:uppercase;margin-bottom:2px;">🎮 Active Match</div>
+        <div id="active-game-desc" style="font-size:.88rem;color:#ddd;font-weight:600;"></div>
+        <div id="active-game-turn" style="font-size:.72rem;color:#7755aa;margin-top:2px;"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="returnToGame()" style="white-space:nowrap;flex-shrink:0;">↩ Rejoin</button>
+    </div>
+
     <div class="mode-grid">
       <button class="mode-btn" onclick="showMpSetup()">
         <span class="icon">👥</span>
@@ -272,6 +303,11 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
         <button class="btn btn-primary btn-sm" onclick="menuAddFriend()" style="white-space:nowrap;">Add</button>
       </div>
       <div class="error-msg" id="menu-add-friend-error" style="min-height:12px;font-size:.76rem;"></div>
+      <!-- Pending requests in menu -->
+      <div id="menu-pending-section" class="hidden">
+        <div class="section-label" style="margin-top:6px;color:#ffaa66;">Pending Requests</div>
+        <div id="menu-pending-list" style="margin-bottom:6px;"></div>
+      </div>
       <div class="section-label" style="margin-top:2px;">Friends</div>
       <div class="friends-list-wrap" id="menu-friends-list">
         <div class="no-friends-msg">No friends yet — add some!</div>
@@ -516,6 +552,14 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
   </div>
 </div>
 
+<!-- FORFEIT BUTTON (shown during active game) -->
+<button id="forfeit-btn" class="hidden" onclick="doForfeit()">🏳 Forfeit</button>
+
+<!-- AWAY WARNING (shown when opponent left and timer running) -->
+<div id="away-banner" class="hidden">
+  <span id="away-banner-text" style="font-size:.85rem;color:#fff;font-weight:600;"></span>
+</div>
+
 <!-- PROMOTION -->
 <div id="promo-overlay" class="hidden">
   <div id="promo-box">
@@ -546,6 +590,18 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     <div style="font-size:3rem;font-family:'Courier New',monospace;font-weight:700;color:#cc99ff;margin:14px 0;" id="opp-reconnect-countdown">90</div>
     <p style="color:#554466;font-size:.82rem;">Game will end if they don't return in time</p>
     <button class="btn btn-secondary" style="margin-top:14px;" onclick="backToMenu()">Forfeit &amp; Leave</button>
+  </div>
+</div>
+
+<!-- LEAVE GAME CONFIRMATION -->
+<div id="leave-confirm-modal" class="hidden">
+  <div id="leave-confirm-box">
+    <h3>⚠️ Leave Game?</h3>
+    <p>You can rejoin from the main menu.<br>If your turn arrives, you have 30 seconds to return or you forfeit.</p>
+    <div style="display:flex;gap:10px;justify-content:center;">
+      <button class="btn btn-danger" style="flex:1;max-width:130px;margin:0;padding:10px;" onclick="confirmLeaveGame()">Yes, Leave</button>
+      <button class="btn btn-primary" style="flex:1;max-width:130px;margin:0;padding:10px;" onclick="cancelLeaveGame()">No, Stay</button>
+    </div>
   </div>
 </div>
 
@@ -632,6 +688,7 @@ let oppReconnectInterval=null;
 let oppEmail=null;           // opponent's email (for friend request after game)
 let prevCaptureCount=0;      // track captures for sound detection
 let prevLastMove=null;       // detect new moves for sound
+let activeGameInfo=null; // {code,color,token,whiteName,blackName} during soft-leave
 
 // ── Three.js ──────────────────────────────────────────────────────────────────
 let scene,camera,renderer,raycaster;
@@ -1003,6 +1060,11 @@ function show(screen){
   } else {
     document.getElementById('auth-bar').classList.add('hidden');
   }
+  if(screen==='game'){
+    document.getElementById('forfeit-btn').classList.remove('hidden');
+  } else {
+    document.getElementById('forfeit-btn').classList.add('hidden');
+  }
 }
 
 // ── Auth UI ───────────────────────────────────────────────────────────────────
@@ -1017,6 +1079,8 @@ function applyUserToUI(user){
   // Friends panel
   document.getElementById('friends-panel').classList.remove('hidden');
   renderMenuFriends(user.friends||[]);
+  renderMenuPendingRequests(user.incomingRequests||[]);
+  if(socket&&socket.connected)socket.emit('get_my_active_game');
   updateIncomingBadge(user.incomingRequests||[]);
   // Auth bar
   document.getElementById('auth-bar').classList.remove('hidden');
@@ -1156,6 +1220,7 @@ function acceptRequest(fromEmail){
     currentUser.incomingRequests=(currentUser.incomingRequests||[]).filter(r=>r.email!==fromEmail);
     updateIncomingBadge(currentUser.incomingRequests);
     renderIncomingRequests(currentUser.incomingRequests);
+    renderMenuPendingRequests(currentUser.incomingRequests);
   }
 }
 
@@ -1165,6 +1230,7 @@ function declineRequest(fromEmail){
     currentUser.incomingRequests=(currentUser.incomingRequests||[]).filter(r=>r.email!==fromEmail);
     updateIncomingBadge(currentUser.incomingRequests);
     renderIncomingRequests(currentUser.incomingRequests);
+    renderMenuPendingRequests(currentUser.incomingRequests);
   }
 }
 
@@ -1324,10 +1390,50 @@ function copyRoomCode(){
   });
 }
 function sendRematch(){socket.emit('rematch');document.getElementById('rematch-status').textContent='Rematch requested…';}
-function backToMenu(){
+function showLeaveConfirm(){document.getElementById('leave-confirm-modal').classList.remove('hidden');}
+function cancelLeaveGame(){document.getElementById('leave-confirm-modal').classList.add('hidden');}
+function confirmLeaveGame(){document.getElementById('leave-confirm-modal').classList.add('hidden');leaveGameTemp();}
+
+function leaveGameTemp(){
+  // Soft-leave: socket stays connected, server notified, menu shown with rejoin banner
+  if(socket&&socket.connected)socket.emit('player_away');
+  // Capture active game info before clearing display state
+  if(roomCode&&playerColor){
+    const tok=getReconnectToken();
+    activeGameInfo={code:roomCode,color:playerColor,token:tok?tok.token:null,
+      whiteName:gameState?gameState.whiteName:'',blackName:gameState?gameState.blackName:''};
+  }
+  // Hide game UI but keep socket + room state
+  document.getElementById('hud').classList.add('hidden');
+  document.getElementById('forfeit-btn').classList.add('hidden');
+  document.getElementById('gameover-overlay').classList.add('hidden');
+  document.getElementById('promo-overlay').classList.add('hidden');
+  document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+  document.getElementById('away-banner').classList.add('hidden');
+  document.getElementById('leave-confirm-modal').classList.add('hidden');
+  stopVoice();
+  // Reset render state only
+  deselect();
+  while(piecesGroup.children.length)piecesGroup.remove(piecesGroup.children[0]);
+  clearHighlights();
+  camera.position.set(0,14,.5);currentLookAt.set(0,0,0);camera.lookAt(currentLookAt);
+  gameState=null;selectedFrom=null;validMoveList=[];
+  show('menu');
+  // Show active game banner
+  if(activeGameInfo){
+    const oppName=activeGameInfo.color==='white'?activeGameInfo.blackName:activeGameInfo.whiteName;
+    document.getElementById('active-game-desc').textContent=`vs ${oppName}`;
+    document.getElementById('active-game-turn').textContent='';
+    document.getElementById('active-game-banner').classList.remove('hidden');
+  }
+}
+
+function doFullLeave(){
   clearReconnectToken();
   stopVoice();
   oppEmail=null;prevCaptureCount=0;prevLastMove=null;
+  activeGameInfo=null;
+  document.getElementById('active-game-banner').classList.add('hidden');
   if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
   show('menu');gameState=null;playerColor=null;roomCode=null;displayClocks={white:null,black:null};
   deselect();if(socket){socket.disconnect();socket=null;}
@@ -1336,10 +1442,54 @@ function backToMenu(){
   document.getElementById('opp-reconnect-overlay').classList.add('hidden');
   document.getElementById('reconnect-overlay').classList.add('hidden');
   document.getElementById('rematch-status').textContent='';
+  document.getElementById('forfeit-btn').classList.add('hidden');
+  document.getElementById('away-banner').classList.add('hidden');
+  document.getElementById('leave-confirm-modal').classList.add('hidden');
   while(piecesGroup.children.length)piecesGroup.remove(piecesGroup.children[0]);
   clearHighlights();
   camera.position.set(0,14,.5);currentLookAt.set(0,0,0);camera.lookAt(currentLookAt);
   initSocket();
+}
+
+function backToMenu(){doFullLeave();}
+
+function returnToGame(){
+  document.getElementById('leave-confirm-modal').classList.add('hidden');
+  if(!activeGameInfo)return;
+  if(socket&&socket.connected&&roomCode===activeGameInfo.code){
+    // Soft rejoin — socket still in room
+    socket.emit('return_to_game');
+    document.getElementById('active-game-banner').classList.add('hidden');
+  } else {
+    // Hard rejoin via token
+    if(activeGameInfo.token){saveReconnectToken(activeGameInfo.code,activeGameInfo.color,activeGameInfo.token);}
+    document.getElementById('active-game-banner').classList.add('hidden');
+    if(socket&&socket.connected){
+      document.getElementById('reconnect-overlay').classList.remove('hidden');
+      const t=getReconnectToken();
+      if(t)socket.emit('rejoin_game',{code:t.code,color:t.color,token:t.token});
+    }
+  }
+}
+
+function doForfeit(){
+  if(!gameState||!playerColor)return;
+  if(gameState.status!=='playing'&&gameState.status!=='check')return;
+  if(confirm('Forfeit this game? You will lose.'))socket.emit('forfeit');
+}
+
+function renderMenuPendingRequests(requests){
+  const section=document.getElementById('menu-pending-section');
+  const list=document.getElementById('menu-pending-list');
+  if(!section||!list)return;
+  if(!requests||requests.length===0){section.classList.add('hidden');return;}
+  section.classList.remove('hidden');
+  list.innerHTML='';
+  requests.forEach(r=>{
+    const row=document.createElement('div');row.className='friend-req-row';
+    row.innerHTML=`<span class="friend-req-name" style="font-size:.82rem;">${r.name} <span style="color:#554466;font-size:.72rem">${r.email}</span></span><button class="btn btn-primary btn-sm" style="padding:3px 10px;font-size:.72rem;" onclick="acceptRequest('${r.email}')">Accept</button><button class="btn btn-secondary btn-sm" style="padding:3px 8px;font-size:.72rem;margin-left:3px;" onclick="declineRequest('${r.email}')">✗</button>`;
+    list.appendChild(row);
+  });
 }
 
 // ── Socket ────────────────────────────────────────────────────────────────────
@@ -1377,6 +1527,7 @@ function initSocket(){
         currentUser.incomingRequests.push({email:fromEmail,name:fromName});
       updateIncomingBadge(currentUser.incomingRequests);
       renderIncomingRequests(currentUser.incomingRequests);
+      renderMenuPendingRequests(currentUser.incomingRequests);
     }
   });
   socket.on('friends:request_sent',({toName})=>{
@@ -1500,6 +1651,7 @@ function initSocket(){
     if(rematchBtn)rematchBtn.style.display=tournamentId?'none':'block';
     setTimeout(()=>{
       show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,true);
+      history.pushState({chess3d:true},'');
       // Show voice controls for multiplayer games only
       if(mode==='multiplayer'){
         document.getElementById('voice-controls').classList.remove('hidden');
@@ -1549,6 +1701,9 @@ function initSocket(){
     setTimeout(()=>{
       document.getElementById('reconnect-overlay').classList.add('hidden');
       show('game');positionSquares();refreshLabels();deselect();setCamForColor(color,false);
+      history.pushState({chess3d:true},'');
+      activeGameInfo=null;
+      document.getElementById('active-game-banner').classList.add('hidden');
     },400);
   });
 
@@ -1658,6 +1813,83 @@ function initSocket(){
     }catch(err){console.warn('voice:signal error',err);}
   });
 
+  socket.on('active_game_result',(info)=>{
+    activeGameInfo=info;
+    const banner=document.getElementById('active-game-banner');
+    if(info){
+      const oppName=info.color==='white'?info.blackName:info.whiteName;
+      document.getElementById('active-game-desc').textContent=`vs ${oppName}`;
+      const turnText=info.turn===info.color?'⚡ Your turn!':'Opponent\'s turn';
+      document.getElementById('active-game-turn').textContent=turnText;
+      banner.classList.remove('hidden');
+      banner.classList.toggle('urgent',info.turn===info.color);
+    } else {
+      banner.classList.add('hidden');
+      activeGameInfo=null;
+    }
+  });
+
+  socket.on('away_turn_tick',({color,name,secs})=>{
+    const banner=document.getElementById('away-banner');
+    const txt=document.getElementById('away-banner-text');
+    // If this event is about the local player (they're on menu and came back)
+    if(color===playerColor&&activeGameInfo){
+      // Update active game banner with urgency
+      const agBanner=document.getElementById('active-game-banner');
+      const agTurn=document.getElementById('active-game-turn');
+      if(secs!==null&&secs>0){
+        agBanner.classList.add('urgent');
+        agTurn.textContent=`⚠️ Your turn! Return in ${secs}s or forfeit`;
+      } else if(secs===null){
+        agBanner.classList.remove('urgent');
+        agTurn.textContent='Opponent\'s turn';
+      }
+      return;
+    }
+    // Show away banner in game for the waiting player
+    if(secs===null){
+      txt.textContent=`${name} has left the game`;
+      banner.classList.remove('hidden');
+    } else if(secs>0){
+      txt.textContent=`${name} has left — ${secs}s to return or forfeit`;
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
+  });
+
+  socket.on('player_returned_event',({color,name})=>{
+    document.getElementById('away-banner').classList.add('hidden');
+    document.getElementById('active-game-banner').classList.remove('urgent');
+  });
+
+  socket.on('player_forfeited',({loser,winner})=>{
+    clearReconnectToken();
+    activeGameInfo=null;
+    document.getElementById('forfeit-btn').classList.add('hidden');
+    document.getElementById('away-banner').classList.add('hidden');
+    document.getElementById('active-game-banner').classList.add('hidden');
+    document.getElementById('opp-reconnect-overlay').classList.add('hidden');
+    if(oppReconnectInterval){clearInterval(oppReconnectInterval);oppReconnectInterval=null;}
+    const rematchBtn=document.getElementById('rematch-btn');
+    if(rematchBtn)rematchBtn.style.display='none';
+    // If we were in soft-leave mode, restore game context for the overlay
+    if(!playerColor&&activeGameInfo)playerColor=activeGameInfo.color;
+    const iLost=loser===playerColor;
+    showGameOver(
+      iLost?'🏳 You Forfeited':'🏆 Opponent Forfeited',
+      iLost?'You resigned the match.':`${oppNameVal} forfeited. You win!`,
+      iLost?'#ff8866':'#88ff99'
+    );
+    if(currentUser){if(iLost)currentUser.stats.losses++;else currentUser.stats.wins++;}
+  });
+
+  socket.on('return_failed',(msg)=>{
+    activeGameInfo=null;
+    document.getElementById('active-game-banner').classList.add('hidden');
+    show('menu');
+  });
+
   // Restore session if saved
   const sess=getSession();
   if(sess&&sess.email&&sess.pin){
@@ -1701,6 +1933,23 @@ document.getElementById('canvas').addEventListener('touchend',e=>{
 
 document.getElementById('mp-join-code').addEventListener('keydown',e=>{if(e.key==='Enter')doJoinRoom();});
 document.getElementById('login-pin').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+
+// Push initial history state to enable back-button interception
+history.pushState({chess3d:true},'');
+
+// Intercept back button / swipe-back
+window.addEventListener('popstate',()=>{
+  history.pushState({chess3d:true},'');
+  const hudVisible=!document.getElementById('hud').classList.contains('hidden');
+  const gameActive=gameState&&(gameState.status==='playing'||gameState.status==='check');
+  if(hudVisible&&gameActive){
+    showLeaveConfirm();
+  } else if(!document.getElementById('menu-overlay').classList.contains('hidden')){
+    // Already on menu — do nothing
+  } else {
+    show('menu');
+  }
+});
 </script>
 </body>
 </html>

@@ -287,6 +287,31 @@ function tickClock(room) {
   room.clocks.lastTick=Date.now();
 }
 
+function startAwayTimer(room, color) {
+  if(room.awayPlayers[color]&&room.awayPlayers[color].timer)clearInterval(room.awayPlayers[color].timer);
+  let secs=30;
+  room.awayPlayers[color]={timer:null,secs};
+  io.to(room.code).emit('away_turn_tick',{color,name:room.names[color],secs});
+  const tick=setInterval(()=>{
+    secs--;
+    if(room.awayPlayers[color])room.awayPlayers[color].secs=secs;
+    io.to(room.code).emit('away_turn_tick',{color,name:room.names[color],secs});
+    if(secs<=0){
+      clearInterval(tick);
+      if(!rooms.has(room.code)||!room.game)return;
+      const g=room.game;
+      if(g.status!=='playing'&&g.status!=='check')return;
+      const winner=opp(color);
+      g.status='forfeit';g.winner=winner;
+      stopClocks(room);saveGameLog(room,'forfeit');
+      if(room.tournamentId)advanceBracket(room.tournamentId,room.matchId,winner==='white'?room.whiteEmail:room.blackEmail);
+      io.to(room.code).emit('player_forfeited',{loser:color,winner});
+      rooms.delete(room.code);
+    }
+  },1000);
+  room.awayPlayers[color].timer=tick;
+}
+
 // ═══════════════════════════════════════════════════════
 // GAME LOG HELPER
 // ═══════════════════════════════════════════════════════
@@ -345,6 +370,7 @@ function makeRoom(opts){
     tournamentId:opts.tournamentId||null,matchId:opts.matchId||null,
     reconnectTokens:{white:null,black:null},   // secure per-player tokens for mid-game rejoin
     disconnected:null,                          // {color,timer} when a player drops mid-game
+    awayPlayers:{},                             // {color:{timer,secs}} when a player soft-leaves
   };
   rooms.set(code,room); return room;
 }
@@ -805,6 +831,13 @@ io.on('connection', (socket) => {
     if(result.needsPromotion){g.pendingPromo={fr,fc,tr,tc};socket.emit('needs_promotion');return;}
     Object.assign(room.game,result);
     emitState(room);
+    // If the next player is away and it's now their turn, start their away timer
+    if((result.status==='playing'||result.status==='check')){
+      const nextColor=result.turn;
+      if(room.awayPlayers&&room.awayPlayers[nextColor]&&!room.awayPlayers[nextColor].timer){
+        startAwayTimer(room,nextColor);
+      }
+    }
     if(result.status==='checkmate'||result.status==='stalemate'){
       stopClocks(room);saveGameLog(room,result.status);
       if(room.tournamentId)advanceBracket(room.tournamentId,room.matchId,result.winner==='white'?room.whiteEmail:room.blackEmail);
@@ -856,6 +889,86 @@ io.on('connection', (socket) => {
     } else { socket.to(room.code).emit('rematch_requested'); }
   });
 
+  socket.on('forfeit',()=>{
+    const room=getRoomBySocket(socket.id);if(!room||!room.game)return;
+    const color=getColor(room,socket.id);if(!color)return;
+    if(room.game.status!=='playing'&&room.game.status!=='check')return;
+    const winner=opp(color);
+    room.game.status='forfeit';room.game.winner=winner;
+    stopClocks(room);saveGameLog(room,'forfeit');
+    if(room.tournamentId)advanceBracket(room.tournamentId,room.matchId,winner==='white'?room.whiteEmail:room.blackEmail);
+    io.to(room.code).emit('player_forfeited',{loser:color,winner});
+    rooms.delete(room.code);
+  });
+
+  socket.on('player_away',()=>{
+    const room=getRoomBySocket(socket.id);if(!room||!room.game)return;
+    const color=getColor(room,socket.id);if(!color)return;
+    if(room.game.status!=='playing'&&room.game.status!=='check')return;
+    room.awayPlayers=room.awayPlayers||{};
+    if(room.game.turn===color){
+      startAwayTimer(room,color);
+    } else {
+      // Not their turn yet — just mark as away, no countdown yet
+      room.awayPlayers[color]={timer:null,secs:null};
+      io.to(room.code).emit('away_turn_tick',{color,name:room.names[color],secs:null});
+    }
+  });
+
+  socket.on('player_returned',()=>{
+    const room=getRoomBySocket(socket.id);if(!room)return;
+    const color=getColor(room,socket.id);if(!color)return;
+    if(room.awayPlayers&&room.awayPlayers[color]){
+      if(room.awayPlayers[color].timer)clearInterval(room.awayPlayers[color].timer);
+      delete room.awayPlayers[color];
+    }
+    socket.to(room.code).emit('player_returned_event',{color,name:room.names[color]});
+  });
+
+  socket.on('return_to_game',()=>{
+    const room=getRoomBySocket(socket.id);
+    if(!room||!room.game||(room.game.status!=='playing'&&room.game.status!=='check'))
+      return socket.emit('rejoin_failed','Game no longer active.');
+    const color=getColor(room,socket.id);
+    if(!color)return socket.emit('rejoin_failed','Not in this game.');
+    if(room.awayPlayers&&room.awayPlayers[color]){
+      if(room.awayPlayers[color].timer)clearInterval(room.awayPlayers[color].timer);
+      delete room.awayPlayers[color];
+    }
+    socket.to(room.code).emit('player_returned_event',{color,name:room.names[color]});
+    socket.emit('game_rejoined',{color,code:room.code,whiteName:room.names.white,blackName:room.names.black,timeControl:room.timeControl,reconnectToken:room.reconnectTokens?room.reconnectTokens[color]:null});
+    emitState(room);
+  });
+
+  socket.on('get_my_active_game',()=>{
+    const room=getRoomBySocket(socket.id);
+    if(room&&room.game&&(room.game.status==='playing'||room.game.status==='check')){
+      const color=getColor(room,socket.id);
+      if(color)return socket.emit('active_game_result',{
+        code:room.code,color,
+        whiteName:room.names.white,blackName:room.names.black,
+        turn:room.game.turn,mode:room.mode,
+        token:room.reconnectTokens?room.reconnectTokens[color]:null
+      });
+    }
+    // Also check by email for reconnected sockets
+    if(sessionEmail){
+      for(const[,r]of rooms){
+        if(!r.game||(r.game.status!=='playing'&&r.game.status!=='check'))continue;
+        if(r.whiteEmail===sessionEmail||r.blackEmail===sessionEmail){
+          const col=r.whiteEmail===sessionEmail?'white':'black';
+          return socket.emit('active_game_result',{
+            code:r.code,color:col,
+            whiteName:r.names.white,blackName:r.names.black,
+            turn:r.game.turn,mode:r.mode,
+            token:r.reconnectTokens?r.reconnectTokens[col]:null
+          });
+        }
+      }
+    }
+    socket.emit('active_game_result',null);
+  });
+
   // ── WebRTC voice chat relay (server just forwards, no processing) ────────────
   socket.on('voice:signal',(data)=>{
     const room=getRoomBySocket(socket.id);
@@ -905,6 +1018,11 @@ io.on('connection', (socket) => {
     const room=getRoomBySocket(socket.id);
     if(!room) return;
     const color=getColor(room,socket.id);
+    // Cancel any away timer for this player
+    if(room&&color&&room.awayPlayers&&room.awayPlayers[color]){
+      if(room.awayPlayers[color].timer)clearInterval(room.awayPlayers[color].timer);
+      delete room.awayPlayers[color];
+    }
     stopClocks(room);
     const gameActive=room.game&&(room.game.status==='playing'||room.game.status==='check');
     if(gameActive&&room.mode==='multiplayer'){
