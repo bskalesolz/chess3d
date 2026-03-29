@@ -212,7 +212,7 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
 #active-game-banner.urgent{border-color:#ff6644!important;animation:urgentPulse .8s infinite;}
 
 /* ── Forfeit button ── */
-#forfeit-btn{position:absolute;bottom:20px;right:16px;z-index:7;background:rgba(8,6,22,.88);border:1px solid #ff776644;border-radius:8px;padding:7px 14px;color:#ff9977;font-size:.78rem;cursor:pointer;backdrop-filter:blur(6px);transition:all .18s;pointer-events:all;}
+#forfeit-btn{margin-top:6px;background:rgba(8,6,22,.88);border:1px solid #ff776644;border-radius:7px;padding:4px 10px;color:#ff9977;font-size:.72rem;cursor:pointer;transition:all .18s;pointer-events:all;width:100%;}
 #forfeit-btn:hover{background:#ff77661a;border-color:#ff7766;}
 #forfeit-btn.hidden{display:none;}
 
@@ -549,11 +549,9 @@ input:checked+.toggle-slider:before{transform:translateX(22px);}
     <div class="hud-name" id="my-name">—</div>
     <div class="hud-cap" id="cap-me"></div>
     <div class="hud-clock" id="clock-me"></div>
+    <button id="forfeit-btn" class="hidden" onclick="doForfeit()">🏳 Forfeit</button>
   </div>
 </div>
-
-<!-- FORFEIT BUTTON (shown during active game) -->
-<button id="forfeit-btn" class="hidden" onclick="doForfeit()">🏳 Forfeit</button>
 
 <!-- AWAY WARNING (shown when opponent left and timer running) -->
 <div id="away-banner" class="hidden">
@@ -778,20 +776,28 @@ function playChessSound(type){
 
 // ── Voice Chat (WebRTC) ───────────────────────────────────────────────────────
 let peerConn=null,localStream=null,remoteAudio=null;
-let micMuted=false,speakerMuted=false,voiceActive=false;
+let micMuted=false,speakerMuted=false,voiceActive=false,voiceConnecting=false;
 
-const ICE_CFG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+const ICE_CFG={iceServers:[
+  {urls:'stun:stun.l.google.com:19302'},
+  {urls:'stun:stun1.l.google.com:19302'},
+  {urls:'stun:stun2.l.google.com:19302'},
+  {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
+  {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
+  {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
+]};
 
 function updateVoiceUI(){
   const mb=document.getElementById('mic-btn');
   const sb=document.getElementById('spk-btn');
   const vs=document.getElementById('voice-status');
-  if(mb){mb.textContent=micMuted?'🔇':'🎤';mb.style.borderColor=micMuted?'#ff4433':voiceActive?'#44ff99':'#6644cc55';}
+  if(mb){mb.textContent=micMuted?'🔇':'🎤';mb.style.borderColor=micMuted?'#ff4433':voiceActive?'#44ff99':voiceConnecting?'#ffaa33':'#6644cc55';}
   if(sb){sb.textContent=speakerMuted?'🔈':'🔊';sb.style.borderColor=speakerMuted?'#ff4433':'#6644cc55';}
-  if(vs)vs.textContent=voiceActive?'● Live':'';
+  if(vs)vs.textContent=voiceActive?'● Live':voiceConnecting?'Connecting…':'';
 }
 
 async function toggleMic(){
+  if(voiceConnecting) return; // ignore clicks while connection is being established
   if(!voiceActive){
     // Start voice chat
     try{
@@ -802,11 +808,12 @@ async function toggleMic(){
       peerConn.ontrack=e=>{
         if(!remoteAudio){remoteAudio=new Audio();remoteAudio.autoplay=true;}
         remoteAudio.srcObject=e.streams[0];
-        voiceActive=true;updateVoiceUI();
+        voiceActive=true;voiceConnecting=false;updateVoiceUI();
       };
       peerConn.onconnectionstatechange=()=>{
         if(peerConn&&(peerConn.connectionState==='failed'||peerConn.connectionState==='disconnected'))stopVoice();
       };
+      voiceConnecting=true;micMuted=false;voiceActive=false;updateVoiceUI();
       // White initiates offer; black waits for signal
       if(playerColor==='white'){
         const offer=await peerConn.createOffer();
@@ -815,9 +822,8 @@ async function toggleMic(){
       } else {
         socket.emit('voice:signal',{type:'ready'});
       }
-      micMuted=false;voiceActive=false;updateVoiceUI(); // will go true on ontrack
-      document.getElementById('voice-status').textContent='Connecting…';
     }catch(err){
+      voiceConnecting=false;updateVoiceUI();
       alert('Microphone access denied: '+err.message);return;
     }
   } else {
@@ -838,7 +844,7 @@ function stopVoice(){
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
   if(peerConn){peerConn.close();peerConn=null;}
   if(remoteAudio){remoteAudio.srcObject=null;remoteAudio=null;}
-  voiceActive=false;micMuted=false;speakerMuted=false;
+  voiceActive=false;voiceConnecting=false;micMuted=false;speakerMuted=false;
   updateVoiceUI();
   document.getElementById('voice-controls').classList.add('hidden');
 }
@@ -1777,32 +1783,36 @@ function initSocket(){
   socket.on('voice:signal',async(data)=>{
     try{
       if(data.type==='ready'){
-        // Black is ready — white sends offer
-        if(playerColor==='white'&&peerConn){
+        // Black is ready — white sends offer (only if white already started voice)
+        if(playerColor==='white'&&peerConn&&(voiceConnecting||voiceActive)){
           const offer=await peerConn.createOffer();
           await peerConn.setLocalDescription(offer);
           socket.emit('voice:signal',{type:'offer',sdp:peerConn.localDescription});
         }
       } else if(data.type==='offer'){
-        // Black receives offer from white
+        // Receiving side gets offer — auto-start mic if not already connected
         if(!peerConn){
-          localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+          try{localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});}
+          catch(e){console.warn('Voice: mic access denied on auto-start');return;}
           peerConn=new RTCPeerConnection(ICE_CFG);
           localStream.getTracks().forEach(t=>peerConn.addTrack(t,localStream));
           peerConn.onicecandidate=e=>{if(e.candidate&&socket)socket.emit('voice:signal',{type:'ice',candidate:e.candidate});};
           peerConn.ontrack=e=>{
             if(!remoteAudio){remoteAudio=new Audio();remoteAudio.autoplay=true;}
             remoteAudio.srcObject=e.streams[0];
-            voiceActive=true;updateVoiceUI();
-            document.getElementById('voice-status').textContent='🔴 Live';
+            voiceActive=true;voiceConnecting=false;updateVoiceUI();
           };
+          peerConn.onconnectionstatechange=()=>{
+            if(peerConn&&(peerConn.connectionState==='failed'||peerConn.connectionState==='disconnected'))stopVoice();
+          };
+          voiceConnecting=true;micMuted=false;voiceActive=false;
+          document.getElementById('voice-controls').classList.remove('hidden');
+          updateVoiceUI();
         }
         await peerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
         const answer=await peerConn.createAnswer();
         await peerConn.setLocalDescription(answer);
         socket.emit('voice:signal',{type:'answer',sdp:peerConn.localDescription});
-        micMuted=false;voiceActive=false;
-        document.getElementById('voice-status').textContent='Connecting…';
       } else if(data.type==='answer'){
         // White receives answer from black
         if(peerConn)await peerConn.setRemoteDescription(new RTCSessionDescription(data.sdp));
